@@ -1,0 +1,21 @@
+name: Package All
+
+on:
+  push:
+    branches:
+    - '**'
+
+jobs:
+  ubuntu-22:
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v2
+    - name: Pre-commit
+      run: |
+        pwd
+        nproc
+        cat /proc/cpuinfo
+        curl -ik https://google.com -o ./asdf.txt
+        ls -la ./
+        md5sum ./asdf.txt
+
