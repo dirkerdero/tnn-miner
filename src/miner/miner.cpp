@@ -47,16 +47,18 @@
 #include <fmt/format.h>
 #include <fmt/printf.h>
 
-#include <omp.h>
 #include <hugepages.h>
+#include <future>
+#include <limits>
 
 #if defined(_WIN32)
 #include <Windows.h>
 #else
+#include "cpp-dns.hpp"
 #include <sched.h>
-#define THREAD_PRIORITY_ABOVE_NORMAL -1
-#define THREAD_PRIORITY_HIGHEST -2
-#define THREAD_PRIORITY_TIME_CRITICAL -15
+#define THREAD_PRIORITY_ABOVE_NORMAL -5
+#define THREAD_PRIORITY_HIGHEST -20
+#define THREAD_PRIORITY_TIME_CRITICAL -20
 #endif
 
 #if defined(_WIN32)
@@ -116,9 +118,13 @@ bool stopBenchmark = false;
 //------------------------------------------------------------------------------
 
 // Report a failure
-void fail(beast::error_code ec, char const *what)
+void fail(beast::error_code ec, char const *what) noexcept
 {
+  mutex.lock();
+  setcolor(RED);
   std::cerr << what << ": " << ec.message() << "\n";
+  setcolor(BRIGHT_WHITE);
+  mutex.unlock();
 }
 
 // Sends a WebSocket message and prints the response
@@ -134,12 +140,72 @@ void do_session(
   beast::error_code ec;
 
   // These objects perform our I/O
-  tcp::resolver resolver(ioc);
+  int addrCount = 0;
+  bool resolved = false;
+
+  net::ip::address ip_address;
+
   websocket::stream<
       beast::ssl_stream<beast::tcp_stream>>
       ws(ioc, ctx);
 
+  // If the specified host/pool is not in IP address form, resolve to acquire the IP address
+#ifndef _WIN32
+  boost::asio::ip::address::from_string(host, ec);
+  if (ec)
+  {
+    // Using cpp-dns to circumvent the issues cause by combining static linking and getaddrinfo()
+    // A second io_context is used to enable std::promise
+    net::io_context ioc2;
+    std::string ip;
+    std::promise<void> p;
+
+    YukiWorkshop::DNSResolver d(ioc2);
+    d.resolve_a4(host, [&](int err, auto &addrs, auto &qname, auto &cname, uint ttl)
+                 {
+  if (!err) {
+      mutex.lock();
+      for (auto &it : addrs) {
+        addrCount++;
+        ip = it.to_string();
+      }
+      p.set_value();
+  } else {
+    p.set_value();
+  } });
+    ioc2.run();
+
+    std::future<void> f = p.get_future();
+    f.get();
+    mutex.unlock();
+
+    if (addrCount == 0)
+    {
+      mutex.lock();
+      setcolor(RED);
+      std::cerr << "ERROR: Could not resolve " << host << std::endl;
+      setcolor(BRIGHT_WHITE);
+      mutex.unlock();
+      return;
+    }
+
+    ip_address = net::ip::address::from_string(ip.c_str(), ec);
+  }
+  else
+  {
+    ip_address = net::ip::address::from_string(host, ec);
+  }
+
+  tcp::endpoint daemon(ip_address, (uint_least16_t)std::stoi(port.c_str()));
+  // Set a timeout on the operation
+  beast::get_lowest_layer(ws).expires_after(std::chrono::seconds(30));
+
+  // Make the connection on the IP address we get from a lookup
+  beast::get_lowest_layer(ws).connect(daemon);
+
+#else
   // Look up the domain name
+  tcp::resolver resolver(ioc);
   auto const results = resolver.async_resolve(host, port, yield[ec]);
   if (ec)
     return fail(ec, "resolve");
@@ -148,9 +214,8 @@ void do_session(
   beast::get_lowest_layer(ws).expires_after(std::chrono::seconds(30));
 
   // Make the connection on the IP address we get from a lookup
-  auto ep = beast::get_lowest_layer(ws).async_connect(results, yield[ec]);
-  if (ec)
-    return fail(ec, "connect");
+  auto daemon = beast::get_lowest_layer(ws).connect(results);
+#endif
 
   // Set SNI Hostname (many hosts need this to handshake successfully)
   if (!SSL_set_tlsext_host_name(
@@ -165,7 +230,7 @@ void do_session(
   // Update the host string. This will provide the value of the
   // Host HTTP header during the WebSocket handshake.
   // See https://tools.ietf.org/html/rfc7230#section-5.4
-  host += ':' + std::to_string(ep.port());
+  host += ':' + std::to_string(daemon.port());
 
   // Set a timeout on the operation
   beast::get_lowest_layer(ws).expires_after(std::chrono::seconds(30));
@@ -222,70 +287,99 @@ void do_session(
         // std::cout << msg;
         // mutex.unlock();
         ws.async_write(boost::asio::buffer(msg), yield[ec]);
+        if (ec)
+        {
+          return fail(ec, "async_write");
+        }
         *B = false;
       }
 
+      beast::get_lowest_layer(ws).expires_after(std::chrono::seconds(5));
       ws.async_read(buffer, yield[ec]);
-
-      // hand getwork feed
-
-      workInfo << beast::make_printable(buffer.data());
-      if (json::accept(workInfo.str()))
+      if (!ec)
       {
-        json workData = json::parse(workInfo.str());
-        if ((isDev ? (workData.at("height") != devHeight) : (workData.at("height") != ourHeight)))
+        // handle getwork feed
+
+        beast::get_lowest_layer(ws).expires_never();
+        workInfo << beast::make_printable(buffer.data());
+        if (json::accept(workInfo.str()))
         {
-          // mutex.lock();
-          if (isDev)
-            devJob = workData;
-          else
-            job = workData;
-          json *J = isDev ? &devJob : &job;
-          // mutex.unlock();
-
-          if ((*J).at("lasterror") != "")
-          {
-            std::cerr << "received error: " << (*J).at("lasterror") << std::endl
-                      << consoleLine;
-          }
-
-          if (!isDev)
+          json workData = json::parse(workInfo.str());
+          if ((isDev ? (workData.at("height") != devHeight) : (workData.at("height") != ourHeight)))
           {
             // mutex.lock();
-            currentBlob = (*J).at("blockhashing_blob");
-            blockCounter = (*J).at("blocks");
-            miniBlockCounter = (*J).at("miniblocks");
-            rejected = (*J).at("rejected");
-            hashrate = (*J).at("difficultyuint64");
-            ourHeight = (*J).at("height");
-            difficulty = (*J).at("difficultyuint64");
-            // printf("NEW JOB RECEIVED | Height: %d | Difficulty %" PRIu64 "\n", ourHeight, difficulty);
-            accepted = (*J).at("miniblocks");
-            rejected = (*J).at("rejected");
-            isConnected = isConnected || true;
-            jobCounter++;
+            if (isDev)
+              devJob = workData;
+            else
+              job = workData;
+            json *J = isDev ? &devJob : &job;
             // mutex.unlock();
-          }
-          else
-          {
-            // mutex.lock();
-            difficultyDev = (*J).at("difficultyuint64");
-            devBlob = (*J).at("blockhashing_blob");
-            devHeight = (*J).at("height");
-            if (!devConnected)
-              std::cout << "Connected to dev pool\n";
-            devConnected = devConnected || true;
-            jobCounter++;
-            // mutex.unlock();
+
+            if ((*J).at("lasterror") != "")
+            {
+              std::cerr << "received error: " << (*J).at("lasterror") << std::endl
+                        << consoleLine;
+            }
+
+            if (!isDev)
+            {
+              currentBlob = (*J).at("blockhashing_blob");
+              blockCounter = (*J).at("blocks");
+              miniBlockCounter = (*J).at("miniblocks");
+              rejected = (*J).at("rejected");
+              hashrate = (*J).at("difficultyuint64");
+              ourHeight = (*J).at("height");
+              difficulty = (*J).at("difficultyuint64");
+              // printf("NEW JOB RECEIVED | Height: %d | Difficulty %" PRIu64 "\n", ourHeight, difficulty);
+              accepted = (*J).at("miniblocks");
+              rejected = (*J).at("rejected");
+              if (!isConnected)
+              {
+                mutex.lock();
+                setcolor(BRIGHT_YELLOW);
+                printf("Mining at: %s/ws/%s\n", host.c_str(), wallet.c_str());
+                setcolor(CYAN);
+                printf("Dev fee: %.2f", devFee);
+                std::cout << "%" << std::endl;
+                setcolor(BRIGHT_WHITE);
+                mutex.unlock();
+              }
+              isConnected = isConnected || true;
+              jobCounter++;
+            }
+            else
+            {
+              difficultyDev = (*J).at("difficultyuint64");
+              devBlob = (*J).at("blockhashing_blob");
+              devHeight = (*J).at("height");
+              if (!devConnected)
+              {
+                mutex.lock();
+                setcolor(CYAN);
+                printf("Connected to dev node: %s\n", devPool);
+                setcolor(BRIGHT_WHITE);
+                mutex.unlock();
+              }
+              devConnected = devConnected || true;
+              jobCounter++;
+              mutex.unlock();
+            }
           }
         }
+      }
+      else
+      {
+        bool *B = isDev ? &devConnected : &isConnected;
+        (*B) = false;
+        fail(ec, "async_read");
+        return;
       }
     }
     catch (...)
     {
+      std::cout << "ws error\n";
     }
-
-    std::this_thread::yield();
+    boost::this_thread::yield();
   }
 
   // // Close the WebSocket connection
@@ -303,8 +397,14 @@ void do_session(
 
 int main(int argc, char **argv)
 {
-  omp_set_num_threads(1);
 #if defined(_WIN32)
+  SetConsoleOutputCP(CP_UTF8);
+#endif
+  setcolor(BRIGHT_WHITE);
+  printf(TNN);
+  boost::this_thread::sleep_for(boost::chrono::seconds(1));
+#if defined(_WIN32)
+  SetConsoleOutputCP(CP_UTF8);
   HANDLE hSelfToken = NULL;
 
   ::OpenProcessToken(::GetCurrentProcess(), TOKEN_ALL_ACCESS, &hSelfToken);
@@ -315,121 +415,297 @@ int main(int argc, char **argv)
 #endif
   // Check command line arguments.
   mpz_pow_ui(oneLsh256.get_mpz_t(), mpz_class(2).get_mpz_t(), 256);
-  if (argc < 5)
+
+  // default values
+  bool lockThreads = true;
+  devFee = 2.5;
+
+  std::string command;
+
+  if (argc > 1)
+    command = argv[1];
+  else
+    goto fillBlanks;
+
+  // Handle debug options
+  if (command == options[TNN_HELP] || command == options[TNN_HELP + 1])
   {
-    std::string command(argv[1]);
-    if (command == "test")
+    setcolor(CYAN);
+    std::cout << usage << std::endl;
+    boost::this_thread::sleep_for(boost::chrono::seconds(30));
+    return 0;
+  }
+  if (command == options[TNN_TEST])
+    goto Testing;
+  if (command == options[TNN_BENCHMARK])
+    goto Benchmarking;
+
+  // Scan arguments
+  for (int i = 1; i < argc; i++)
+  {
+    std::vector<std::string>::iterator it = std::find(options.begin(), options.end(), argv[i]);
+    if (it != options.end())
     {
-      mpz_class diffTest("20000", 10);
-
-      workerData *WORKER = new workerData;
-
-      TestAstroBWTv3();
-      TestAstroBWTv3repeattest();
-      boost::this_thread::sleep_for(boost::chrono::seconds(30));
+      int index = std::distance(options.begin(), it);
+      if (index == TNN_DAEMON || index == TNN_DAEMON + 1)
+      {
+        i++;
+        host = argv[i];
+      }
+      else if (index == TNN_PORT || index == TNN_PORT + 1)
+      {
+        i++;
+        port = argv[i];
+      }
+      else if (index == TNN_WALLET || index == TNN_WALLET + 1)
+      {
+        i++;
+        wallet = argv[i];
+      }
+      else if (index == TNN_FEE || index == TNN_FEE + 1)
+      {
+        try
+        {
+          i++;
+          devFee = std::stod(argv[i]);
+          if (devFee < minFee)
+          {
+            setcolor(RED);
+            printf("ERROR: dev fee must be at least %.2f", minFee);
+            std::cout << "%" << std::endl;
+            setcolor(BRIGHT_WHITE);
+            boost::this_thread::sleep_for(boost::chrono::seconds(30));
+            return 1;
+          }
+        }
+        catch (...)
+        {
+          printf("ERROR: invalid dev fee parameter... format should be for example '1.0'");
+          boost::this_thread::sleep_for(boost::chrono::seconds(30));
+          return 1;
+        }
+      }
+      else if (index == TNN_THREADS || index == TNN_THREADS + 1)
+      {
+        try
+        {
+          i++;
+          threads = std::stoi(argv[i]);
+        }
+        catch (...)
+        {
+          printf("ERROR: invalid threads parameter... must be an integer");
+          boost::this_thread::sleep_for(boost::chrono::seconds(30));
+          return 1;
+        }
+      }
+      else if (index == TNN_NO_LOCK)
+      {
+        lockThreads = false;
+      }
+    }
+    else
+    {
+      setcolor(RED);
+      printf("ERROR: Unexpected argument '%s'\n", argv[i]);
+      setcolor(CYAN);
+      printf("%s\n", usage);
       return 0;
     }
-    if (command == "benchmark")
+  }
+
+fillBlanks:
+{
+  printf("%s\n", inputIntro);
+  std::vector<std::string *> stringParams = {&host, &port, &wallet};
+  std::vector<const char *> stringDefaults = {devPool, "10300", devWallet};
+  std::vector<const char *> stringPrompts = {daemonPrompt, portPrompt, walletPrompt};
+  int i = 0;
+  for (std::string *param : stringParams)
+  {
+    if (*param == nullArg)
     {
-      threads = 1;
-      threads = std::stoi(argv[2]);
-      int duration = std::stoi(argv[3]);
+      setcolor(CYAN);
+      printf("%s\n", stringPrompts[i]);
+      setcolor(BRIGHT_WHITE);
 
-      unsigned int n = std::thread::hardware_concurrency();
-      int winMask = 0;
-      for (int i = 0; i < n - 1; i++)
+      std::string cmdLine;
+      std::getline(std::cin, cmdLine);
+      if (cmdLine != "" && cmdLine.find_first_not_of(' ') != std::string::npos)
       {
-        winMask += 1 << i;
-      }
-
-      host = devPool;
-      port = devPort;
-      wallet = devWallet;
-
-      boost::thread GETWORK(getWork, false);
-      setPriority(GETWORK.native_handle(), THREAD_PRIORITY_ABOVE_NORMAL);
-
-      winMask = std::max(1, winMask);
-
-      auto start_time = std::chrono::high_resolution_clock::now();
-      // Create worker threads and set CPU affinity
-      for (int i = 0; i < threads; i++)
-      {
-        boost::thread t(mineBlock, i + 1);
-#if defined(_WIN32)
-        setAffinity(t.native_handle(), 1 << (i % n));
-#else
-        setAffinity(t.native_handle(), i);
-#endif
-        if (threads == 1 || (n > 2 && i <= n - 2))
-          setPriority(t.native_handle(), THREAD_PRIORITY_HIGHEST);
-
-        mutex.lock();
-        std::cout << "(Benchmark) Worker " << i + 1 << " created" << std::endl;
-        mutex.unlock();
-      }
-
-      boost::thread t2(logSeconds, start_time, duration, &stopBenchmark);
-      setPriority(t2.native_handle(), THREAD_PRIORITY_TIME_CRITICAL);
-
-      while (true)
-      {
-        auto now = std::chrono::system_clock::now();
-        auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time).count();
-        if (milliseconds >= duration * 1000)
-        {
-          stopBenchmark = true;
-          break;
-        }
-        std::this_thread::yield();
-      }
-
-      int64_t hashrate = counter / duration;
-      std::string intro = fmt::sprintf("Mined for %d seconds, average rate of ", duration);
-      std::cout << intro << std::flush;
-      if (hashrate >= 1000000)
-      {
-        double rate = (double)(hashrate / 1000000.0);
-        std::string hrate = fmt::sprintf("%.2f MH/s", rate);
-        std::cout << hrate << std::endl;
-      }
-      else if (hashrate >= 1000)
-      {
-        double rate = (double)(hashrate / 1000.0);
-        std::string hrate = fmt::sprintf("%.2f KH/s", rate);
-        std::cout << hrate << std::endl;
+        *param = cmdLine;
       }
       else
       {
-        std::string hrate = fmt::sprintf("%.2f H/s", (double)hashrate);
-        std::cout << hrate << std::endl;
+        *param = stringDefaults[i];
+        setcolor(BRIGHT_YELLOW);
+        printf("Default value will be used: %s\n\n", (*param).c_str());
+        setcolor(BRIGHT_WHITE);
       }
-      std::this_thread::yield();
-      return 0;
+    }
+    i++;
+  }
+  if (threads == 0)
+  {
+    while (true)
+    {
+      setcolor(CYAN);
+      printf("%s\n", threadPrompt);
+      setcolor(BRIGHT_WHITE);
+
+      std::string cmdLine;
+      std::getline(std::cin, cmdLine);
+      if (cmdLine != "" && cmdLine.find_first_not_of(' ') != std::string::npos)
+      {
+        try
+        {
+          threads = std::stoi(cmdLine.c_str());
+          break;
+        }
+        catch (...)
+        {
+          printf("ERROR: invalid threads parameter... must be an integer\n");
+          continue;
+        }
+      }
+      else
+      {
+        setcolor(BRIGHT_YELLOW);
+        printf("Default value will be used: 1\n\n");
+        setcolor(BRIGHT_WHITE);
+        threads = 1;
+        break;
+      }
+
+      if (threads == 0)
+        threads = 1;
+      break;
     }
   }
-  if (argc < 5)
+}
+  printf("\n");
+  goto Mining;
+Testing:
+{
+  mpz_class diffTest("20000", 10);
+
+  workerData *WORKER = new workerData;
+
+  TestAstroBWTv3();
+  TestAstroBWTv3repeattest();
+  boost::this_thread::sleep_for(boost::chrono::seconds(30));
+  return 0;
+}
+Benchmarking:
+{
+  if (argc < 4)
   {
-    std::cerr << "Usage: websocket-client-coro-ssl <host> <port> <text> <threads>\n"
-              << "Example:\n"
-              << "    Tnn-miner 0.0.0.0 10100 walletAddress 1\n";
-    return EXIT_FAILURE;
+    setcolor(RED);
+    printf("ERROR: Invalid benchmark arguments. Use %s for assistance", options[TNN_HELP]);
   }
-  host = argv[1];
-  port = argv[2];
-  wallet = argv[3];
+  threads = 1;
+  threads = std::stoi(argv[2]);
+  int duration = std::stoi(argv[3]);
+  if (argc > 4 && argv[4] == options[TNN_NO_LOCK])
+  {
+    lockThreads = false;
+  }
+
+  unsigned int n = std::thread::hardware_concurrency();
+  int winMask = 0;
+  for (int i = 0; i < n - 1; i++)
+  {
+    winMask += 1 << i;
+  }
+
+  host = devPool;
+  port = devPort;
+  wallet = devWallet;
 
   boost::thread GETWORK(getWork, false);
   setPriority(GETWORK.native_handle(), THREAD_PRIORITY_ABOVE_NORMAL);
 
-  // boost::thread GETWORKDEV(getWork, true);
-  // setPriority(GETWORKDEV.native_handle(), THREAD_PRIORITY_ABOVE_NORMAL);
+  winMask = std::max(1, winMask);
 
-  threads = 1;
-  if (argc >= 5 && argv[4] != NULL)
+  auto start_time = std::chrono::high_resolution_clock::now();
+  // Create worker threads and set CPU affinity
+  for (int i = 0; i < threads; i++)
   {
-    threads = std::stoi(argv[4]);
+    boost::thread t(benchmark, i + 1);
+
+    if (lockThreads)
+    {
+#if defined(_WIN32)
+      setAffinity(t.native_handle(), 1 << (i % n));
+#else
+      setAffinity(t.native_handle(), i);
+#endif
+    }
+
+    setPriority(t.native_handle(), THREAD_PRIORITY_HIGHEST);
+
+    mutex.lock();
+    std::cout << "(Benchmark) Worker " << i + 1 << " created" << std::endl;
+    mutex.unlock();
   }
+
+  while (!isConnected)
+  {
+    boost::this_thread::yield();
+  }
+
+  boost::thread t2(logSeconds, start_time, duration, &stopBenchmark);
+  setPriority(t2.native_handle(), THREAD_PRIORITY_TIME_CRITICAL);
+
+  while (true)
+  {
+    auto now = std::chrono::system_clock::now();
+    auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time).count();
+    if (milliseconds >= duration * 1000)
+    {
+      stopBenchmark = true;
+      break;
+    }
+    boost::this_thread::yield();
+  }
+
+  auto now = std::chrono::system_clock::now();
+  auto seconds = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
+  int64_t hashrate = counter / duration;
+  std::string intro = fmt::sprintf("Mined for %d seconds, average rate of ", seconds);
+  std::cout << intro << std::flush;
+  if (hashrate >= 1000000)
+  {
+    double rate = (double)(hashrate / 1000000.0);
+    std::string hrate = fmt::sprintf("%.2f MH/s", rate);
+    std::cout << hrate << std::endl;
+  }
+  else if (hashrate >= 1000)
+  {
+    double rate = (double)(hashrate / 1000.0);
+    std::string hrate = fmt::sprintf("%.2f KH/s", rate);
+    std::cout << hrate << std::endl;
+  }
+  else
+  {
+    std::string hrate = fmt::sprintf("%.2f H/s", (double)hashrate);
+    std::cout << hrate << std::endl;
+  }
+  boost::this_thread::yield();
+  return 0;
+}
+
+Mining:
+{
+  mutex.lock();
+  printSupported();
+  mutex.unlock();
+
+  boost::thread GETWORK(getWork, false);
+  setPriority(GETWORK.native_handle(), THREAD_PRIORITY_ABOVE_NORMAL);
+
+  boost::thread DEVWORK(getWork, true);
+  setPriority(DEVWORK.native_handle(), THREAD_PRIORITY_ABOVE_NORMAL);
 
   unsigned int n = std::thread::hardware_concurrency();
   int winMask = 0;
@@ -441,31 +717,40 @@ int main(int argc, char **argv)
   winMask = std::max(1, winMask);
 
   // Create worker threads and set CPU affinity
+  mutex.lock();
   for (int i = 0; i < threads; i++)
   {
     boost::thread t(mineBlock, i + 1);
+
+    if (lockThreads)
+    {
 #if defined(_WIN32)
-    setAffinity(t.native_handle(), 1 << (i % n));
+      setAffinity(t.native_handle(), 1 << (i % n));
 #else
-    setAffinity(t.native_handle(), i);
+      setAffinity(t.native_handle(), i);
 #endif
+    }
     // if (threads == 1 || (n > 2 && i <= n - 2))
     setPriority(t.native_handle(), THREAD_PRIORITY_HIGHEST);
 
-    mutex.lock();
     std::cout << "Thread " << i + 1 << " started" << std::endl;
-    mutex.unlock();
   }
+  mutex.unlock();
 
   auto start_time = std::chrono::high_resolution_clock::now();
   // update(start_time);
+
+  while (!isConnected)
+  {
+    boost::this_thread::yield();
+  }
 
   boost::thread reporter(update, start_time);
   setPriority(reporter.native_handle(), THREAD_PRIORITY_TIME_CRITICAL);
 
   while (true)
   {
-    std::this_thread::yield();
+    boost::this_thread::yield();
   }
 
   // std::string input;
@@ -479,6 +764,7 @@ int main(int argc, char **argv)
   // }
 
   return EXIT_SUCCESS;
+}
 }
 
 void logSeconds(std::chrono::_V2::system_clock::time_point start_time, int duration, bool *stop)
@@ -494,12 +780,13 @@ void logSeconds(std::chrono::_V2::system_clock::time_point start_time, int durat
       mutex.lock();
       // std::cout << "\n" << std::flush;
       printf("\rBENCHMARKING: %d/%d seconds elapsed...", i, duration);
+      std::cout << std::flush;
       mutex.unlock();
       if (i == duration || *stop)
         break;
       i++;
     }
-    std::this_thread::yield();
+    boost::this_thread::yield();
   }
 }
 
@@ -507,8 +794,13 @@ void update(std::chrono::_V2::system_clock::time_point start_time)
 {
   auto beginning = start_time;
   boost::this_thread::sleep_for(boost::chrono::milliseconds(50));
+
+startReporting:
   while (true)
   {
+    if (!isConnected)
+      break;
+
     auto now = std::chrono::system_clock::now();
     auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time).count();
 
@@ -550,9 +842,9 @@ void update(std::chrono::_V2::system_clock::time_point start_time)
         double rate = (double)(hashrate / 1000000.0);
         std::string hrate = fmt::sprintf("HASHRATE %.2f MH/s", rate);
         mutex.lock();
-        setcolor(15);
+        setcolor(BRIGHT_WHITE);
         std::cout << "\r" << std::setw(2) << std::setfill('0') << consoleLine;
-        setcolor(3);
+        setcolor(CYAN);
         std::cout << std::setw(2) << std::setfill('0') << consoleLine << std::setw(2) << hrate << " | " << std::flush;
       }
       else if (hashrate >= 1000)
@@ -560,29 +852,42 @@ void update(std::chrono::_V2::system_clock::time_point start_time)
         double rate = (double)(hashrate / 1000.0);
         std::string hrate = fmt::sprintf("HASHRATE %.2f KH/s", rate);
         mutex.lock();
-        setcolor(15);
+        setcolor(BRIGHT_WHITE);
         std::cout << "\r" << std::setw(2) << std::setfill('0') << consoleLine;
-        setcolor(3);
+        setcolor(CYAN);
         std::cout << std::setw(2) << hrate << " | " << std::flush;
       }
       else
       {
         std::string hrate = fmt::sprintf("HASHRATE %.2f H/s", (double)hashrate, hrate);
         mutex.lock();
-        setcolor(15);
+        setcolor(BRIGHT_WHITE);
         std::cout << "\r" << std::setw(2) << std::setfill('0') << consoleLine;
-        setcolor(3);
+        setcolor(CYAN);
         std::cout << std::setw(2) << hrate << " | " << std::flush;
       }
 
       std::string uptime = fmt::sprintf("%dd-%dh-%dm-%ds >> ", daysUp, hoursUp, minutesUp, secondsUp);
       std::cout << std::setw(2) << "ACCEPTED " << accepted << std::setw(2) << " | REJECTED " << rejected
                 << std::setw(2) << " | DIFFICULTY " << (difficulty) << std::setw(2) << " | UPTIME " << uptime << std::flush;
-      setcolor(15);
+      setcolor(BRIGHT_WHITE);
       mutex.unlock();
     }
-    std::this_thread::yield();
+    boost::this_thread::yield();
   }
+  while (true)
+  {
+    if (isConnected)
+    {
+      rate30sec.clear();
+      counter.store(0);
+      start_time = std::chrono::system_clock::now();
+      beginning = start_time;
+      break;
+    }
+    boost::this_thread::yield();
+  }
+  goto startReporting;
 }
 
 void setAffinity(boost::thread::native_handle_type t, int core)
@@ -651,43 +956,121 @@ void getWork(bool isDev)
   ssl::context ctx = ssl::context{ssl::context::tlsv12_client};
   load_root_certificates(ctx);
 
+  bool caughtDisconnect = false;
+
 connectionAttempt:
-  // Launch the asynchronous operation
-  bool err = false;
-  // if (isDev)
-  boost::asio::spawn(ioc, std::bind(&do_session, std::string(devPool), std::string(devPort), std::string(devWallet), std::ref(ioc), std::ref(ctx), std::placeholders::_1, true),
-                     // on completion, spawn will call this function
-                     [&](std::exception_ptr ex)
-                     {
-                       if (ex)
-                       {
-                         std::rethrow_exception(ex);
-                         err = true;
-                       }
-                     });
-  // else
-  boost::asio::spawn(ioc, std::bind(&do_session, std::string(host), std::string(port), std::string(wallet), std::ref(ioc), std::ref(ctx), std::placeholders::_1, false),
-                     // on completion, spawn will call this function
-                     [&](std::exception_ptr ex)
-                     {
-                       if (ex)
-                       {
-                         std::rethrow_exception(ex);
-                         err = true;
-                       }
-                     });
-  ioc.run();
-  if (err)
+  bool *B = isDev ? &devConnected : &isConnected;
+  *B = false;
+  mutex.lock();
+  setcolor(BRIGHT_YELLOW);
+  std::cout << "Connecting...\n";
+  setcolor(BRIGHT_WHITE);
+  mutex.unlock();
+  try
   {
+    // Launch the asynchronous operation
+    bool err = false;
+    if (isDev)
+      boost::asio::spawn(ioc, std::bind(&do_session, std::string(devPool), std::string(devPort), std::string(devWallet), std::ref(ioc), std::ref(ctx), std::placeholders::_1, true),
+                         // on completion, spawn will call this function
+                         [&](std::exception_ptr ex)
+                         {
+                           if (ex)
+                           {
+                             std::rethrow_exception(ex);
+                             err = true;
+                           }
+                         });
+    else
+      boost::asio::spawn(ioc, std::bind(&do_session, host, port, wallet, std::ref(ioc), std::ref(ctx), std::placeholders::_1, false),
+                         // on completion, spawn will call this function
+                         [&](std::exception_ptr ex)
+                         {
+                           if (ex)
+                           {
+                             std::rethrow_exception(ex);
+                             err = true;
+                           }
+                         });
+    ioc.run();
     if (err)
     {
-      std::cerr << "Error establishing connections" << std::endl
-                << "Will try again in 10 seconds";
+      if (!isDev)
+      {
+        mutex.lock();
+        setcolor(RED);
+        std::cerr << "\nError establishing connections" << std::endl
+                  << "Will try again in 10 seconds...\n\n";
+        setcolor(BRIGHT_WHITE);
+        mutex.unlock();
+      }
+      boost::this_thread::sleep_for(boost::chrono::milliseconds(10000));
+      ioc.reset();
+      goto connectionAttempt;
+    }
+    else
+    {
+      caughtDisconnect = false;
+    }
+  }
+  catch (...)
+  {
+    if (!isDev)
+    {
+      mutex.lock();
+      setcolor(RED);
+      std::cerr << "\nError establishing connections" << std::endl
+                << "Will try again in 10 seconds...\n\n";
+      setcolor(BRIGHT_WHITE);
+      mutex.unlock();
+    }
+    else
+    {
+      mutex.lock();
+      setcolor(RED);
+      std::cerr << "Dev connection error\n";
+      setcolor(BRIGHT_WHITE);
+      mutex.unlock();
     }
     boost::this_thread::sleep_for(boost::chrono::milliseconds(10000));
     ioc.reset();
     goto connectionAttempt;
   }
+  while (*B)
+  {
+    caughtDisconnect = false;
+    boost::this_thread::yield();
+  }
+  if (!isDev)
+  {
+    mutex.lock();
+    setcolor(RED);
+    if (!caughtDisconnect)
+      std::cerr << "\nERROR: lost connection" << std::endl
+                << "Will try to reconnect in 10 seconds...\n\n";
+    else
+      std::cerr << "\nError establishing connection" << std::endl
+                << "Will try again in 10 seconds...\n\n";
+    setcolor(BRIGHT_WHITE);
+    mutex.unlock();
+  }
+  else
+  {
+    mutex.lock();
+    setcolor(RED);
+    if (!caughtDisconnect)
+      std::cerr << "\nERROR: lost connection to dev node (mining will continue)" << std::endl
+                << "Will try to reconnect in 10 seconds...\n\n";
+    else
+      std::cerr << "\nError establishing connection to dev node" << std::endl
+                << "Will try again in 10 seconds...\n\n";
+    setcolor(BRIGHT_WHITE);
+    mutex.unlock();
+  }
+  caughtDisconnect = true;
+  boost::this_thread::sleep_for(boost::chrono::milliseconds(10000));
+  ioc.reset();
+  goto connectionAttempt;
 }
 
 void benchmark(int tid)
@@ -711,12 +1094,13 @@ void benchmark(int tid)
   int32_t i = 0;
 
   byte powHash[32];
-  // workerData *worker = (workerData *)malloc_huge_pages(sizeof(workerData));
-  workerData *worker = new workerData();
+  workerData *worker = (workerData *)malloc_huge_pages(sizeof(workerData));
+  worker->init();
+  // workerData *worker = new workerData();
 
   while (!isConnected)
   {
-    std::this_thread::yield();
+    boost::this_thread::yield();
   }
 
   work[MINIBLOCK_SIZE - 1] = (byte)tid;
@@ -730,11 +1114,6 @@ void benchmark(int tid)
     hexstr_to_bytes(myJob.at("blockhashing_blob"), b2);
     memcpy(work, b2, MINIBLOCK_SIZE);
     delete[] b2;
-
-    byte *b3 = new byte[MINIBLOCK_SIZE];
-    hexstr_to_bytes(myJob.at("blockhashing_blob"), b3);
-    memcpy(work, b3, MINIBLOCK_SIZE);
-    delete[] b3;
 
     while (localJobCounter == jobCounter)
     {
@@ -779,15 +1158,13 @@ void mineBlock(int tid)
   byte powHash[32];
   byte devWork[MINIBLOCK_SIZE];
 
-  mutex.lock();
-  workerData *worker = (workerData *)malloc_huge_pages(sizeof(workerData));
-  mutex.unlock();
+  workerData *worker = new workerData();
 
-  (*worker).init();
+waitForJob:
 
   while (!isConnected)
   {
-    std::this_thread::yield();
+    boost::this_thread::yield();
   }
 
   while (true)
@@ -831,7 +1208,7 @@ void mineBlock(int tid)
       double which;
       bool devMine = false;
       bool submit = false;
-      uint64_t DIFF = devMine ? difficultyDev : difficulty;
+      uint64_t DIFF;
       // DIFF = 5000;
 
       std::string hex;
@@ -841,6 +1218,7 @@ void mineBlock(int tid)
         which = (double)(rand() % 10000);
         devMine = (devConnected && which < devFee * 100.0);
         i++;
+        DIFF = devMine ? difficultyDev : difficulty;
         byte *WORK = devMine ? &devWork[0] : &work[0];
         memcpy(&WORK[MINIBLOCK_SIZE - 5], &i, sizeof(i));
 
@@ -851,23 +1229,18 @@ void mineBlock(int tid)
           std::swap(WORK[MINIBLOCK_SIZE - 4], WORK[MINIBLOCK_SIZE - 3]);
         }
 
-        // hex = hexStr(&WORK[0], MINIBLOCK_SIZE);
-        // memcpy(B, hex.c_str(), hex.size());
         AstroBWTv3(&WORK[0], MINIBLOCK_SIZE, powHash, *worker);
         counter.store(counter + 1);
-        // std::cout << hexStr(powHash, 32) << std::endl;
         submit = devMine ? !submittingDev : !submitting;
         if (submit && CheckHash(powHash, DIFF))
-        { // note we are doing a local, NW might have moved meanwhile
-          // std::cout << hexStr(powHash, 32) << std::endl
-          //           << std::endl;
+        {
           if (devMine)
           {
             mutex.lock();
             submittingDev = true;
-            setcolor(14);
-            std::cout << "\n(DEV) Thread " << tid << " found a dev nonce\n";
-            setcolor(15);
+            setcolor(CYAN);
+            std::cout << "\n(DEV) Thread " << tid << " found a dev share\n";
+            setcolor(BRIGHT_WHITE);
             mutex.unlock();
             devShare = {
                 {"jobid", myJobDev.at("jobid")},
@@ -877,19 +1250,27 @@ void mineBlock(int tid)
           {
             mutex.lock();
             submitting = true;
-            setcolor(14);
+            setcolor(BRIGHT_YELLOW);
             std::cout << "\nThread " << tid << " found a nonce!\n";
-            setcolor(15);
+            setcolor(BRIGHT_WHITE);
             mutex.unlock();
             share = {
                 {"jobid", myJob.at("jobid")},
                 {"mbl_blob", hexStr(&WORK[0], MINIBLOCK_SIZE).c_str()}};
           }
         }
+        if (!isConnected)
+          break;
       }
+      if (!isConnected)
+        break;
     }
     catch (...)
     {
+      std::cerr << "Error in POW Function" << std::endl;
     }
+    if (!isConnected)
+      break;
   }
+  goto waitForJob;
 }

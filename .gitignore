@@ -23,9 +23,11 @@
 
 # Directories
 /bin
+/lib
 /hooks
 /info
 /CMakeFiles
+/config
 /.vscode
 
 # Misc
