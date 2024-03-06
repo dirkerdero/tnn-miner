@@ -61,6 +61,12 @@ bool debugOpOrder = false;
 //   return 0;
 // }
 
+struct OpTestResult {
+  unsigned char input[256];
+  unsigned char result[256];
+  std::chrono::nanoseconds duration_ns;
+};
+
 void saveBufferToFile(const std::string& filename, const byte* buffer, size_t size) {
     // // Generate unique filename using timestamp
     // std::string timestamp = std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -365,14 +371,15 @@ inline __m256i _mm256_reverse_epi8(__m256i input) {
     return input;
 }
 
-void optest(int op, workerData &worker, bool print=true) {
+void optest(int op, workerData &worker, OpTestResult &opTestRes, bool print=true) {
   if (print) {
-    printf("Scalar\npre op %d: ", op);
+    printf("Scalar\npre op %3d: ", op);
     for (int i = worker.pos1; i < worker.pos1 + 32; i++) {
-      printf("%02X ", worker.step_3[i]);
+      printf("%02x", worker.step_3[i]);
     }
     printf("\n");
   }
+  memcpy(opTestRes.input, worker.step_3, 256);
 
   auto start = std::chrono::steady_clock::now();
   for(int n = 0; n < 4; n++){
@@ -1035,7 +1042,7 @@ void optest(int op, workerData &worker, bool print=true) {
       }
       break;
     case 54:
-
+  
 #pragma GCC unroll 32
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
@@ -1614,14 +1621,15 @@ case 80:
 }
 
 
-void optest_simd(int op, workerData &worker, bool print=true) {
+void optest_simd(int op, workerData &worker, OpTestResult &simdTestRes, bool print=true) {
   if (print){
-    printf("SIMD\npre op %d: ", op);
+    printf("SIMD\npre op %3d: ", op);
     for (int i = worker.pos1; i < worker.pos1 + 32; i++) {
-      printf("%02X ", worker.step_3[i]);
+      printf("%02x", worker.step_3[i]);
     }
     printf("\n");
   }
+  memcpy(simdTestRes.input, worker.step_3, 256);
 
   auto start = std::chrono::steady_clock::now();
   for(int n = 0; n < 4; n++){
@@ -3054,10 +3062,12 @@ void optest_simd(int op, workerData &worker, bool print=true) {
   }
   auto end = std::chrono::steady_clock::now();
   auto time = std::chrono::duration_cast<std::chrono::nanoseconds>(end-start);
+  simdTestRes.duration_ns = time;
+  memcpy(simdTestRes.result, worker.step_3, 256);
   if (print){
-    printf("result: ");
+    printf("    result: ");
     for (int i = worker.pos1; i < worker.pos1 + 32; i++) {
-      printf("%02x ", worker.step_3[i]);
+      printf("%02x", worker.step_3[i]);
     }
     printf("\n took %dns\n", time.count());
   }
@@ -3080,15 +3090,77 @@ void runOpTests(int op, int len) {
 
   // WARMUP, don't print times
   memcpy(&worker->step_3, test, 16);
-  optest(0, *worker, false);
+  OpTestResult *opResult = new OpTestResult;
+  optest(0, *worker, *opResult, false);
   // WARMUP, don't print times
-  optest(op, *worker);
+  optest(op, *worker, *opResult);
 
   // WARMUP, don't print times
   memcpy(&worker->step_3, test,  16);
-  optest_simd(0, *worker, false);
+  optest_simd(0, *worker, *opResult, false);
   // Primary benchmarking
-  optest_simd(op, *worker);
+  optest_simd(op, *worker, *opResult);
+}
+
+void runOpSimdVerificationTests(int max_op, int len) {
+  if(max_op < 0) {
+    max_op = 255;
+  }
+  if(len < 0) {
+    len = 32;
+  }
+  testPopcnt256_epi8();
+  workerData *worker = new workerData;
+  worker->pos1 = 0; worker->pos2 = len;
+
+  unsigned char test[32];
+  std::srand(time(NULL));
+  generateInitVector<32>(test);
+
+  printf("Initial Input\n");
+  for (int i = 0; i < 32; i++) {
+    printf("%02x", test[i]);
+  }
+  printf("\n");
+
+  for(int op = 0; op <= max_op; op++) {
+    // WARMUP, don't print times
+    memcpy(&worker->step_3, test, len);
+    OpTestResult *opResult = new OpTestResult;
+    optest(0, *worker, *opResult, false);
+    // WARMUP, don't print times
+    //memcpy(&worker->step_3, test, 256);
+    optest(op, *worker, *opResult, false);
+    //printf("  Op: %3d - %6dns\n", op, opResult->duration_ns);
+
+    // WARMUP, don't print times
+    memcpy(&worker->step_3, test,  len);
+    OpTestResult *simdResult = new OpTestResult;
+    optest_simd(0, *worker, *simdResult, false);
+    // Primary benchmarking
+    //memcpy(&worker->step_3, test, 256);
+    optest_simd(op, *worker, *simdResult, false);
+    //printf("SIMD: %3d - %6dns\n", op, simdResult->duration_ns);
+    auto op_dur = opResult->duration_ns.count();
+    auto simd_dur = simdResult->duration_ns.count();
+
+    auto percent_speedup = double(double(op_dur-simd_dur)/double(simd_dur))*100;
+    auto valid = memcmp(opResult->result, simdResult->result, 255);
+    //printf("Speedup: %3.2f%\n", percent_speedup);
+    printf("  Op: %3d - %5dns vs %5dns - %04.2f %% - %d\n", op, opResult->duration_ns, simdResult->duration_ns, percent_speedup, valid);
+    if(valid != 0) {
+      printf("  OP: ");
+      for (int i = 0; i < len; i++) {
+        printf("%02x", opResult->result[i]);
+      }
+      printf("\n");
+      printf("SIMD: ");
+      for (int i = 0; i < len; i++) {
+        printf("%02x", simdResult->result[i]);
+      }
+      printf("\n");
+    }
+  }
 }
 
 // Function to compare two suffixes based on lexicographical order

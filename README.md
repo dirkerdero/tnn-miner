@@ -44,7 +44,7 @@ DEBUG
     -test: (must be first arg)
         Runs a set of tests to verify AstrobwtV3 is working
     -benchmark <A> <B>:
-        Runs a mining benchmark for <B> seconds with <A> threads for hashrate testing
+        Runs a mining benchmark with <A> threads for <B> seconds for hashrate testing
         You may insert the -no-lock flag after <A> and <B> if desired. 
 ```
 ### If the miner is run without any args, a CLI wizard will simply ask you to provide the required options one at a time.

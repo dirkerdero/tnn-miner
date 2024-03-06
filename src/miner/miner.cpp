@@ -118,6 +118,8 @@ std::vector<int64_t> rate30sec;
 bool isConnected = false;
 bool devConnected = false;
 
+bool useSimd = false;
+
 using byte = unsigned char;
 bool stopBenchmark = false;
 //------------------------------------------------------------------------------
@@ -451,6 +453,8 @@ int main(int argc, char **argv)
     goto Testing;
   if (command == options[TNN_BENCHMARK])
     goto Benchmarking;
+  if (command == options[TNN_VERIFY])
+    goto Verify;
 
   // Scan arguments
   for (int i = 1; i < argc; i++)
@@ -524,6 +528,11 @@ int main(int argc, char **argv)
       else if (index == TNN_NO_LOCK)
       {
         lockThreads = false;
+      }
+      else if (index == TNN_SIMD)
+      {
+        printf("Use SIMD!\n");
+        useSimd = true;
       }
     }
     else
@@ -655,9 +664,17 @@ Benchmarking:
   threads = 1;
   threads = std::stoi(argv[2]);
   int duration = std::stoi(argv[3]);
-  if (argc > 4 && argv[4] == options[TNN_NO_LOCK])
+  if (argc > 4) 
   {
-    lockThreads = false;
+    if (argv[4] == options[TNN_NO_LOCK])
+    {
+      lockThreads = false;
+    }
+    if (argv[4] == options[TNN_SIMD])
+    {
+      printf("Use SIMD!\n");
+      useSimd = true;
+    }
   }
 
   unsigned int n = std::thread::hardware_concurrency();
@@ -676,7 +693,6 @@ Benchmarking:
 
   winMask = std::max(1, winMask);
 
-  auto start_time = std::chrono::high_resolution_clock::now();
   // Create worker threads and set CPU affinity
   for (int i = 0; i < threads; i++)
   {
@@ -703,6 +719,7 @@ Benchmarking:
     boost::this_thread::yield();
   }
 
+  auto start_time = std::chrono::high_resolution_clock::now();
   boost::thread t2(logSeconds, start_time, duration, &stopBenchmark);
   setPriority(t2.native_handle(), THREAD_PRIORITY_TIME_CRITICAL);
 
@@ -741,6 +758,37 @@ Benchmarking:
     std::cout << hrate << std::endl;
   }
   boost::this_thread::yield();
+  return 0;
+}
+
+Verify:
+{
+  mutex.lock();
+  printSupported();
+  mutex.unlock();
+  mpz_class diffTest("20000", 10);
+
+  for (int i = 1; i < argc; i++)
+  {
+    std::vector<std::string>::iterator it = std::find(options.begin(), options.end(), argv[i]);
+    if (it != options.end())
+    {
+      int index = std::distance(options.begin(), it);
+      if (index == TNN_OP)
+      {
+        i++;
+        testOp = std::stoi(argv[i]);
+      }
+      else if (index == TNN_TLEN)
+      {
+        i++;
+        testLen = std::stoi(argv[i]);
+      }
+    }
+  }
+  printf("Ops: %d Len: %d\n", testOp, testLen);
+  runOpSimdVerificationTests(testOp, testLen);
+
   return 0;
 }
 
@@ -1181,7 +1229,7 @@ void benchmark(int tid)
         std::swap(work[MINIBLOCK_SIZE - 5], work[MINIBLOCK_SIZE - 2]);
         std::swap(work[MINIBLOCK_SIZE - 4], work[MINIBLOCK_SIZE - 3]);
       }
-      AstroBWTv3(work, MINIBLOCK_SIZE, powHash, *worker, false, true);
+      AstroBWTv3(work, MINIBLOCK_SIZE, powHash, *worker, false, useSimd);
       counter.store(counter + 1);
       benchCounter.store(benchCounter + 1);
       if (stopBenchmark)
@@ -1287,7 +1335,7 @@ waitForJob:
           std::swap(WORK[MINIBLOCK_SIZE - 5], WORK[MINIBLOCK_SIZE - 2]);
           std::swap(WORK[MINIBLOCK_SIZE - 4], WORK[MINIBLOCK_SIZE - 3]);
         }
-        AstroBWTv3(&WORK[0], MINIBLOCK_SIZE, powHash, *worker, false, true);
+        AstroBWTv3(&WORK[0], MINIBLOCK_SIZE, powHash, *worker, false, useSimd);
         
         counter.store(counter + 1);
         submit = devMine ? !submittingDev : !submitting;

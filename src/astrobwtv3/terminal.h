@@ -46,6 +46,8 @@ const char *TNN = R"(
 #define TNN_SABENCH 18
 #define TNN_OP 19
 #define TNN_TLEN 20
+#define TNN_VERIFY 21
+#define TNN_SIMD 22
 
 std::vector<std::string> options = {
     "-daemon-address",
@@ -68,7 +70,9 @@ std::vector<std::string> options = {
     "-b",
     "-sabench",
     "-o",
-    "-l"
+    "-l",
+    "-verify",
+    "-simd"
 };
 
 const char* usage = R"(
@@ -100,7 +104,7 @@ DEBUG
           -o <num> : Sets which branch op to benchmark (0-255), benchmark will be skipped if unspecified
           -l <num> : Sets length of the processed chunk in said benchmark (default 15) 
     -benchmark <A> <B>:
-        Runs a mining benchmark for <B> seconds with <A> threads for hashrate testing
+        Runs a mining benchmark with <A> threads for <B> seconds for hashrate testing
         You may insert the -no-lock flag after <A> and <B> if desired. 
 )";
 
