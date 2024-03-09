@@ -51,6 +51,7 @@
 #include <future>
 #include <limits>
 #include <libcubwt.cuh>
+#include <lookupcompute.h>
 
 #include <bit>
 
@@ -94,6 +95,8 @@ std::string devBlob;
 
 bool submitting = false;
 bool submittingDev = false;
+
+byte lookup3D_global[branchedOps_size*256*256];
 
 int jobCounter;
 boost::atomic<int64_t> counter = 0;
@@ -418,6 +421,8 @@ int main(int argc, char **argv)
     std::cout << "Permission Granted for Huge Pages!" << std::endl;
   else
     std::cout << "Huge Pages: Permission Failed..." << std::endl;
+
+  SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
 #endif
   // Check command line arguments.
   mpz_pow_ui(oneLsh256.get_mpz_t(), mpz_class(2).get_mpz_t(), 256);
@@ -689,7 +694,7 @@ Benchmarking:
   wallet = devWallet;
 
   boost::thread GETWORK(getWork, false);
-  setPriority(GETWORK.native_handle(), THREAD_PRIORITY_ABOVE_NORMAL);
+  // setPriority(GETWORK.native_handle(), THREAD_PRIORITY_ABOVE_NORMAL);
 
   winMask = std::max(1, winMask);
 
@@ -707,7 +712,7 @@ Benchmarking:
 #endif
     }
 
-    setPriority(t.native_handle(), THREAD_PRIORITY_HIGHEST);
+    // setPriority(t.native_handle(), THREAD_PRIORITY_HIGHEST);
 
     mutex.lock();
     std::cout << "(Benchmark) Worker " << i + 1 << " created" << std::endl;
@@ -716,7 +721,7 @@ Benchmarking:
 
   while (!isConnected)
   {
-    boost::this_thread::yield();
+    boost::this_thread::sleep_for(boost::chrono::milliseconds(100));
   }
 
   auto start_time = std::chrono::high_resolution_clock::now();
@@ -732,7 +737,7 @@ Benchmarking:
       stopBenchmark = true;
       break;
     }
-    boost::this_thread::yield();
+    boost::this_thread::sleep_for(boost::chrono::milliseconds(50));
   }
 
   auto now = std::chrono::system_clock::now();
@@ -757,7 +762,7 @@ Benchmarking:
     std::string hrate = fmt::sprintf("%.2f H/s", (double)hashrate);
     std::cout << hrate << std::endl;
   }
-  boost::this_thread::yield();
+  boost::this_thread::sleep_for(boost::chrono::milliseconds(100));
   return 0;
 }
 
@@ -799,10 +804,10 @@ Mining:
   mutex.unlock();
 
   boost::thread GETWORK(getWork, false);
-  setPriority(GETWORK.native_handle(), THREAD_PRIORITY_ABOVE_NORMAL);
+  // setPriority(GETWORK.native_handle(), THREAD_PRIORITY_ABOVE_NORMAL);
 
   boost::thread DEVWORK(getWork, true);
-  setPriority(DEVWORK.native_handle(), THREAD_PRIORITY_ABOVE_NORMAL);
+  // setPriority(DEVWORK.native_handle(), THREAD_PRIORITY_ABOVE_NORMAL);
 
   unsigned int n = std::thread::hardware_concurrency();
   int winMask = 0;
@@ -818,7 +823,7 @@ Mining:
   if (false /*gpuMine*/ )
   {
     // boost::thread t(cudaMine);
-    // setPriority(t.native_handle(), THREAD_PRIORITY_HIGHEST);
+    // setPriority(t.native_handle(), THREAD_PRIORITY_ABOVE_NORMAL);
     // continue;
   }
   else
@@ -835,7 +840,7 @@ Mining:
 #endif
       }
       // if (threads == 1 || (n > 2 && i <= n - 2))
-      setPriority(t.native_handle(), THREAD_PRIORITY_HIGHEST);
+      // setPriority(t.native_handle(), THREAD_PRIORITY_ABOVE_NORMAL);
 
       std::cout << "Thread " << i + 1 << " started" << std::endl;
     }
@@ -850,11 +855,11 @@ Mining:
   }
 
   boost::thread reporter(update, start_time);
-  setPriority(reporter.native_handle(), THREAD_PRIORITY_TIME_CRITICAL);
+  setPriority(reporter.native_handle(), THREAD_PRIORITY_ABOVE_NORMAL);
 
   while (true)
   {
-    boost::this_thread::sleep_for(boost::chrono::milliseconds(125));
+    boost::this_thread::sleep_for(boost::chrono::milliseconds(500));
   }
 
   // std::string input;
@@ -868,7 +873,7 @@ Mining:
   // }
 
   return EXIT_SUCCESS;
-}
+  }
 }
 
 void logSeconds(std::chrono::_V2::system_clock::time_point start_time, int duration, bool *stop)
@@ -890,7 +895,7 @@ void logSeconds(std::chrono::_V2::system_clock::time_point start_time, int durat
         break;
       i++;
     }
-    boost::this_thread::yield();
+    boost::this_thread::sleep_for(boost::chrono::milliseconds(250));
   }
 }
 
@@ -989,7 +994,7 @@ startReporting:
       beginning = start_time;
       break;
     }
-    boost::this_thread::yield();
+    boost::this_thread::sleep_for(boost::chrono::milliseconds(50));
   }
   goto startReporting;
 }
@@ -1143,7 +1148,7 @@ connectionAttempt:
   while (*B)
   {
     caughtDisconnect = false;
-    boost::this_thread::yield();
+    boost::this_thread::sleep_for(boost::chrono::milliseconds(200));
   }
   if (!isDev)
   {
@@ -1197,13 +1202,19 @@ void benchmark(int tid)
   int32_t i = 0;
 
   byte powHash[32];
+  byte powHash2[32];
   workerData *worker = (workerData *)malloc_huge_pages(sizeof(workerData));
   initWorker(*worker);
+  lookupGen(*worker, lookup3D_global);
+
+  workerData *worker2 = (workerData *)malloc_huge_pages(sizeof(workerData));
+  initWorker(*worker2);
+  lookupGen(*worker2, lookup3D_global);
   // workerData *worker = new workerData();
 
   while (!isConnected)
   {
-    boost::this_thread::yield();
+    boost::this_thread::sleep_for(boost::chrono::milliseconds(100));
   }
 
   work[MINIBLOCK_SIZE - 1] = (byte)tid;
@@ -1231,6 +1242,7 @@ void benchmark(int tid)
         std::swap(work[MINIBLOCK_SIZE - 4], work[MINIBLOCK_SIZE - 3]);
       }
       AstroBWTv3(work, MINIBLOCK_SIZE, powHash, *worker, true, useSimd);
+
       counter.store(counter + 1);
       benchCounter.store(benchCounter + 1);
       if (stopBenchmark)
@@ -1263,6 +1275,7 @@ void mineBlock(int tid)
 
   workerData *worker = (workerData *)malloc_huge_pages(sizeof(workerData));
   initWorker(*worker);
+  lookupGen(*worker, lookup3D_global);
 
   // std::cout << *worker << std::endl;
 
@@ -1270,7 +1283,7 @@ waitForJob:
 
   while (!isConnected)
   {
-    boost::this_thread::yield();
+    boost::this_thread::sleep_for(boost::chrono::milliseconds(100));
   }
 
   while (true)
@@ -1339,7 +1352,8 @@ waitForJob:
           std::swap(WORK[MINIBLOCK_SIZE - 5], WORK[MINIBLOCK_SIZE - 2]);
           std::swap(WORK[MINIBLOCK_SIZE - 4], WORK[MINIBLOCK_SIZE - 3]);
         }
-        AstroBWTv3(&WORK[0], MINIBLOCK_SIZE, powHash, *worker, false, useSimd);
+
+        AstroBWTv3(&WORK[0], MINIBLOCK_SIZE, powHash, *worker, true, useSimd);
         
         counter.store(counter + 1);
         submit = devMine ? !submittingDev : !submitting;
