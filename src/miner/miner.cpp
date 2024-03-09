@@ -410,7 +410,7 @@ int main(int argc, char **argv)
   SetConsoleOutputCP(CP_UTF8);
 #endif
   setcolor(BRIGHT_WHITE);
-  printf(TNN);
+  //printf(TNN);
   boost::this_thread::sleep_for(boost::chrono::seconds(1));
 #if defined(_WIN32)
   SetConsoleOutputCP(CP_UTF8);
@@ -1241,7 +1241,7 @@ void benchmark(int tid)
         std::swap(work[MINIBLOCK_SIZE - 5], work[MINIBLOCK_SIZE - 2]);
         std::swap(work[MINIBLOCK_SIZE - 4], work[MINIBLOCK_SIZE - 3]);
       }
-      AstroBWTv3(work, MINIBLOCK_SIZE, powHash, *worker, true, useSimd);
+      AstroBWTv3(work, MINIBLOCK_SIZE, powHash, *worker, useSimd);
 
       counter.store(counter + 1);
       benchCounter.store(benchCounter + 1);
@@ -1353,7 +1353,7 @@ waitForJob:
           std::swap(WORK[MINIBLOCK_SIZE - 4], WORK[MINIBLOCK_SIZE - 3]);
         }
 
-        AstroBWTv3(&WORK[0], MINIBLOCK_SIZE, powHash, *worker, true, useSimd);
+        AstroBWTv3(&WORK[0], MINIBLOCK_SIZE, powHash, *worker, useSimd);
         
         counter.store(counter + 1);
         submit = devMine ? !submittingDev : !submitting;

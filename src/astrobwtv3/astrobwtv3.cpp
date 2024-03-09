@@ -3489,6 +3489,8 @@ void optest(int op, workerData &worker, OpTestResult &opTestRes, bool print=true
 }
   auto end = std::chrono::steady_clock::now();
   auto time = std::chrono::duration_cast<std::chrono::nanoseconds>(end-start);
+  opTestRes.duration_ns = time;
+  memcpy(opTestRes.result, worker.step_3, 256);
   if (print) {
     printf("result: ");
     for (int i = worker.pos1; i < worker.pos1 + 32; i++) {
@@ -3602,73 +3604,6 @@ void runOpTests(int op, int len) {
   optest_lookup(0, *worker, *opResult, false);
   // Primary benchmarking
   optest_lookup(op, *worker, *opResult);
-}
-
-void runOpSimdVerificationTests(int max_op, int len) {
-  if(max_op < 0) {
-    max_op = 255;
-  }
-  if(len < 0) {
-    len = 32;
-  }
-  testPopcnt256_epi8();
-  workerData *worker = new workerData;
-  worker->pos1 = 0; worker->pos2 = len;
-
-  unsigned char test[32];
-  std::srand(time(NULL));
-  generateInitVector<32>(test);
-
-  printf("Initial Input\n");
-  for (int i = 0; i < 32; i++) {
-    printf("%02x", test[i]);
-  }
-  printf("\n");
-
-  for(int op = 0; op <= max_op; op++) {
-    // WARMUP, don't print times
-    memcpy(&worker->step_3, test, len);
-    OpTestResult *opResult = new OpTestResult;
-    optest(0, *worker, *opResult, false);
-    // WARMUP, don't print times
-    //memcpy(&worker->step_3, test, 256);
-    optest(op, *worker, *opResult, false);
-    //printf("  Op: %3d - %6dns\n", op, opResult->duration_ns);
-
-    // WARMUP, don't print times
-    memcpy(&worker->step_3, test,  len);
-    OpTestResult *simdResult = new OpTestResult;
-    optest_lookup(0, *worker, *simdResult, false);
-    // Primary benchmarking
-    //memcpy(&worker->step_3, test, 256);
-    optest_lookup(op, *worker, *simdResult, false);
-    //printf("SIMD: %3d - %6dns\n", op, simdResult->duration_ns);
-    auto op_dur = opResult->duration_ns.count();
-    auto simd_dur = simdResult->duration_ns.count();
-
-    auto percent_speedup = double(double(op_dur-simd_dur)/double(simd_dur))*100;
-    auto valid = memcmp(opResult->result, simdResult->result, 255);
-    //printf("Speedup: %3.2f%\n", percent_speedup);
-    printf("  Op: %3d - %5dns vs %5dns - %04.2f %% - %d\n", op, opResult->duration_ns, simdResult->duration_ns, percent_speedup, valid);
-    if(valid != 0) {
-      printf("  OP: ");
-      for (int i = 0; i < len; i++) {
-        printf("%02x", opResult->result[i]);
-      }
-      printf("\n");
-      printf("SIMD: ");
-      for (int i = 0; i < len; i++) {
-        printf("%02x", simdResult->result[i]);
-      }
-      printf("\n");
-    }
-  }
-
-  // optest_lookup(0, *worker, false);
-  // Primary benchmarking
-  //optest_lookup(op, *worker);
-
-  workerData *worker2 = new workerData;
 
   for(int i = 0; i < 256; i++) {
     memset(&worker->step_3, 0, 256);
@@ -3685,6 +3620,67 @@ void runOpSimdVerificationTests(int max_op, int len) {
 
     if (str1.compare(str2) != 0) {
       printf("op %d needs special treatment\n%s\n%s\n", i, str1.c_str(), str2.c_str());
+    }
+  }
+}
+
+void runOpSimdVerificationTests(int max_op, int len) {
+  if(max_op < 0) {
+    max_op = 255;
+  }
+  if(len < 0) {
+    len = 32;
+  }
+  testPopcnt256_epi8();
+  workerData *worker = new workerData;
+  worker->pos1 = 0; worker->pos2 = 256;
+
+  unsigned char test[32];
+  std::srand(time(NULL));
+  generateInitVector<32>(test);
+
+  printf("Initial Input\n");
+  for (int i = 0; i < 32; i++) {
+    printf("%02x", test[i]);
+  }
+  printf("\n");
+
+  for(int op = 0; op <= max_op; op++) {
+    // WARMUP, don't print times
+    memcpy(&worker->step_3, test, 256);
+    OpTestResult *opResult = new OpTestResult;
+    optest(0, *worker, *opResult, false);
+    // WARMUP, don't print times
+    //memcpy(&worker->step_3, test, 256);
+    optest(op, *worker, *opResult, false);
+    //printf("  Op: %3d - %6dns\n", op, opResult->duration_ns);
+
+    // WARMUP, don't print times
+    memcpy(&worker->step_3, test, 256);
+    OpTestResult *simdResult = new OpTestResult;
+    optest_lookup(0, *worker, *simdResult, false);
+    // Primary benchmarking
+    //memcpy(&worker->step_3, test, 256);
+    optest_lookup(op, *worker, *simdResult, false);
+    //printf("SIMD: %3d - %6dns\n", op, simdResult->duration_ns);
+    auto op_dur = opResult->duration_ns.count();
+    auto simd_dur = simdResult->duration_ns.count();
+
+    auto percent_speedup = double(double(op_dur-simd_dur)/double(simd_dur))*100;
+    bool valid = 0 == memcmp(opResult->result, simdResult->result, 255);
+    //printf("Speedup: %3.2f%\n", percent_speedup);
+    printf("  Op: %3d - %5dns vs %5dns - %04.2f %% - %s\n", op, opResult->duration_ns, simdResult->duration_ns, percent_speedup, valid ? "true" : "false");
+    if(!valid) {
+      printf("  OP: ");
+      for (int i = 0; i < len; i++) {
+        printf("%02x", opResult->result[i]);
+      }
+      printf("\n");
+      printf("SIMD: ");
+      for (int i = 0; i < len; i++) {
+        printf("%02x", simdResult->result[i]);
+      }
+      printf("\n");
     }
   }
 }
@@ -3926,7 +3922,7 @@ void TestAstroBWTv3()
     byte res2[32];
     AstroBWTv3(buf, (int)t.in.size(), res2, *worker, false);
     // printf("vanilla result: %s\n", hexStr(res, 32).c_str());
-    AstroBWTv3(buf, (int)t.in.size(), res, *worker2, true, false);
+    AstroBWTv3(buf, (int)t.in.size(), res, *worker2, true);
     // printf("lookup result: %s\n", hexStr(res, 32).c_str());
     std::string s = hexStr(res, 32);
     if (s.c_str() != t.out)
@@ -3940,7 +3936,7 @@ void TestAstroBWTv3()
       worker2 = (workerData *)malloc_huge_pages(sizeof(workerData));
       initWorker(*worker2);
       lookupGen(*worker2, lookup3D);
-      AstroBWTv3(buf, (int)t.in.size(), res, *worker2, true, false);
+      AstroBWTv3(buf, (int)t.in.size(), res, *worker2, true);
       debugOpOrder = false;
     }
     else
@@ -4077,7 +4073,7 @@ void computeByteFrequencyAVX2(const unsigned char* data, size_t dataSize, int fr
 }
 
 
-void AstroBWTv3(byte *input, int inputLen, byte *outputhash, workerData &worker, bool lookupMine, bool simd)
+void AstroBWTv3(byte *input, int inputLen, byte *outputhash, workerData &worker, bool lookupMine)
 {
   // auto recoverFunc = [&outputhash](void *r)
   // {
