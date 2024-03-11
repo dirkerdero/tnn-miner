@@ -58,6 +58,7 @@ using byte = unsigned char;
 
 int ops[256];
 
+uint16_t lookup2D[regOps_size*256*256];
 byte lookup3D[branchedOps_size*256*256];
 
 std::vector<byte> opsA;
@@ -133,7 +134,7 @@ void checkSIMDSupport() {
 }
 */
 
-
+#if defined(__AVX2__)
 inline __m128i mullo_epi8(__m128i a, __m128i b)
 {
     // unpack and multiply
@@ -391,7 +392,13 @@ inline __m256i _mm256_reverse_epi8(__m256i input) {
     return input;
 }
 
+<<<<<<< HEAD
 void optest(int op, workerData &worker, OpTestResult &opTestRes, bool print=true) {
+=======
+#endif
+
+void optest(int op, workerData &worker, bool print=true) {
+>>>>>>> origin/dev
   if (print) {
     printf("Scalar\n--------------\npre op %d: ", op);
     for (int i = worker.pos1; i < worker.pos1 + 32; i++) {
@@ -3512,14 +3519,15 @@ void optest_lookup(int op, workerData &worker, OpTestResult &simdTestRes, bool p
 
   auto start = std::chrono::steady_clock::now();
   bool use2D = std::find(worker.branchedOps, worker.branchedOps + branchedOps_size, op) == worker.branchedOps + branchedOps_size;
-  byte *lookup = use2D ? &worker.lookup2D[0] : &worker.lookup3D[0];
+  uint16_t *lookup2D = use2D ? &worker.lookup2D[0] : nullptr;
+  byte *lookup3D = use2D ? nullptr : &worker.lookup3D[0];
 
   int firstIndex;
   if (use2D) {
-    __builtin_prefetch(lookup);
-    firstIndex = worker.reg_idx[op]*256;
+    __builtin_prefetch(lookup2D,0,1);
+    firstIndex = worker.reg_idx[op]*(256*256);
   } else {
-    __builtin_prefetch(lookup,0,1);
+    __builtin_prefetch(lookup3D,0,1);
     firstIndex = worker.branched_idx[op]*256*256 + worker.step_3[worker.pos2]*256;
   }
   for(int n = 0; n < 256; n++){
@@ -3543,8 +3551,22 @@ void optest_lookup(int op, workerData &worker, OpTestResult &simdTestRes, bool p
     } else if (op == 255) {
       RC4_set_key(&worker.key, 256,  worker.step_3);
     }
-    for (int i = worker.pos1; i < worker.pos2; i ++) {
-      worker.step_3[i] = lookup[firstIndex + worker.step_3[i]];
+    if (use2D) {
+      int n = 0;
+      for (int i = worker.pos1; i < worker.pos2-1; i += 2) {
+        if (i < worker.pos1+16) __builtin_prefetch(&lookup2D[firstIndex + 256*n++],0,3);
+        uint16_t val = lookup2D[(firstIndex + (worker.step_3[i] << 8)) | worker.step_3[i+1]];
+        memcpy(&worker.step_3[i], &val, sizeof(uint16_t));
+      }
+      if ((worker.pos2-worker.pos1)%2 != 0) {
+        uint16_t val = lookup2D[firstIndex + (worker.step_3[worker.pos2-1] << 8)];
+        worker.step_3[worker.pos2-1] = (val & 0xFF00) >> 8;
+      }
+    } else {
+      firstIndex = worker.branched_idx[op]*256*256 + worker.step_3[worker.pos2]*256;
+      for(int i = worker.pos1; i < worker.pos2; i++) {
+        worker.step_3[i] = lookup3D[firstIndex + worker.step_3[i]];
+      }
     }
     if (op == 0) {
       if ((worker.pos2-worker.pos1)%2 == 1) {
@@ -3569,14 +3591,17 @@ void optest_lookup(int op, workerData &worker, OpTestResult &simdTestRes, bool p
 }
 
 void runOpTests(int op, int len) {
+  #if defined(__AVX2__)
   testPopcnt256_epi8();
+  #endif
+
   workerData *worker = (workerData*)malloc_huge_pages(sizeof(workerData));
   initWorker(*worker);
-  lookupGen(*worker, lookup3D);
+  lookupGen(*worker, lookup2D, lookup3D);
 
   workerData *worker2 = (workerData*)malloc_huge_pages(sizeof(workerData));
   initWorker(*worker2);
-  lookupGen(*worker2, lookup3D);
+  lookupGen(*worker2, lookup2D, lookup3D);
 
   worker->pos1 = 0; worker->pos2 = len;
   worker2->pos1 = 0; worker2->pos2 = len;
@@ -3906,10 +3931,10 @@ void TestAstroBWTv3()
   int n = -1;
   workerData *worker = (workerData *)malloc_huge_pages(sizeof(workerData));
   initWorker(*worker);
-  lookupGen(*worker, lookup3D);
+  lookupGen(*worker, lookup2D, lookup3D);
   workerData *worker2 = (workerData *)malloc_huge_pages(sizeof(workerData));
   initWorker(*worker2);
-  lookupGen(*worker2, lookup3D);
+  lookupGen(*worker2, lookup2D, lookup3D);
 
   int i = 0;
   for (PowTest t : random_pow_tests)
@@ -3928,16 +3953,18 @@ void TestAstroBWTv3()
     if (s.c_str() != t.out)
     {
       printf("FAIL. Pow function: pow(%s) = %s want %s\n", t.in.c_str(), s.c_str(), t.out.c_str());
-      debugOpOrder = true;
-      worker = (workerData *)malloc_huge_pages(sizeof(workerData));
-      initWorker(*worker);
-      lookupGen(*worker, lookup3D);
-      AstroBWTv3(buf, (int)t.in.size(), res2, *worker, false);
-      worker2 = (workerData *)malloc_huge_pages(sizeof(workerData));
-      initWorker(*worker2);
-      lookupGen(*worker2, lookup3D);
-      AstroBWTv3(buf, (int)t.in.size(), res, *worker2, true);
-      debugOpOrder = false;
+      // Section below is for debugging modifications to the branched compute operation
+
+      // debugOpOrder = true;
+      // worker = (workerData *)malloc_huge_pages(sizeof(workerData));
+      // initWorker(*worker);
+      // lookupGen(*worker, lookup2D, lookup3D);
+      // AstroBWTv3(buf, (int)t.in.size(), res2, *worker, false);
+      // worker2 = (workerData *)malloc_huge_pages(sizeof(workerData));
+      // initWorker(*worker2);
+      // lookupGen(*worker2, lookup2D, lookup3D);
+      // AstroBWTv3(buf, (int)t.in.size(), res, *worker2, true, false);
+      // debugOpOrder = false;
     }
     else
     {
@@ -4038,6 +4065,8 @@ void TestAstroBWTv3repeattest()
   std::cout << "Repeated test over" << std::endl;
 }
 
+#if defined(__AVX2__)
+
 void computeByteFrequencyAVX2(const unsigned char* data, size_t dataSize, int frequencyTable[256]) {
     __m256i chunk;
     const size_t simdWidth = 32; // AVX2 SIMD register width in bytes
@@ -4071,6 +4100,8 @@ void computeByteFrequencyAVX2(const unsigned char* data, size_t dataSize, int fr
         frequencyTable[i] += localFrequencyTable[i];
     }
 }
+
+#endif
 
 
 void AstroBWTv3(byte *input, int inputLen, byte *outputhash, workerData &worker, bool lookupMine)
@@ -4129,23 +4160,23 @@ void AstroBWTv3(byte *input, int inputLen, byte *outputhash, workerData &worker,
 
     // auto time = std::chrono::duration_cast<std::chrono::nanoseconds>(end-start);
     // printf("branched section took %dns\n", time.count());
-    // if (debugOpOrder) {
-    //   if (lookupMine) {
-    //     printf("Lookup Table:\n-----------\n");
-    //     for (int i = 0; i < worker.opsB.size(); i++) {
-    //       printf("%d, ", worker.opsB[i]);
-    //     }
-    //   } else {
-    //     printf("Scalar:\n-----------\n");
-    //     for (int i = 0; i < worker.opsA.size(); i++) {
-    //       printf("%d, ", worker.opsA[i]);
-    //     }
-    //   }
+    if (debugOpOrder) {
+      if (lookupMine) {
+        printf("Lookup Table:\n-----------\n");
+        for (int i = 0; i < worker.opsB.size(); i++) {
+          printf("%d, ", worker.opsB[i]);
+        }
+      } else {
+        printf("Scalar:\n-----------\n");
+        for (int i = 0; i < worker.opsA.size(); i++) {
+          printf("%d, ", worker.opsA[i]);
+        }
+      }
 
-    //   printf("\n");
-    //   worker.opsA.clear();
-    //   worker.opsB.clear();
-    // }
+      printf("\n");
+      worker.opsA.clear();
+      worker.opsB.clear();
+    }
     worker.data_len = static_cast<uint32_t>((worker.tries - 4) * 256 + (((static_cast<uint64_t>(worker.step_3[253]) << 8) | static_cast<uint64_t>(worker.step_3[254])) & 0x3ff));
     // worker.data_len = 70000;
     // saveBufferToFile("worker_sData_snapshot.bin", worker.sData, worker.data_len);
@@ -4180,6 +4211,7 @@ void AstroBWTv3(byte *input, int inputLen, byte *outputhash, workerData &worker,
   }
 }
 
+
 void branchComputeCPU(workerData &worker)
 {
   while (true)
@@ -4189,7 +4221,7 @@ void branchComputeCPU(workerData &worker)
     // printf("%d worker.random_switcher %d %08jx\n", worker.tries, worker.random_switcher, worker.random_switcher);
 
     worker.op = static_cast<byte>(worker.random_switcher);
-    // if (debugOpOrder) worker.opsA.push_back(worker.op);
+    if (debugOpOrder) worker.opsA.push_back(worker.op);
 
     // printf("op: %d\n", worker.op);
 
@@ -4209,13 +4241,13 @@ void branchComputeCPU(workerData &worker)
     // fmt::printf("op: %d, ", worker.op);
     // fmt::printf("worker.pos1: %d, worker.pos2: %d\n", worker.pos1, worker.pos2);
 
-    // if (debugOpOrder) {
-      // printf("pre op %d:\n", worker.op);
-      // for (int i = worker.pos1; i < worker.pos2; i++) {
-      //     printf("%02X ", worker.step_3[i]);
-      // } 
-      // printf("\n");
-    // }
+    if (debugOpOrder && worker.op == 225) {
+      printf("pre op %d:\n", worker.op);
+      for (int i = worker.pos1; i < worker.pos2; i++) {
+          printf("%02X ", worker.step_3[i]);
+      } 
+      printf("\n");
+    }
 
     switch (worker.op)
     {
@@ -7301,13 +7333,13 @@ void branchComputeCPU(workerData &worker)
       break;
     }
 
-    // if (debugOpOrder) {
-      // printf("op %d result:\n", worker.op);
-      // for (int i = worker.pos1; i < worker.pos2; i++) {
-      //     printf("%02X ", worker.step_3[i]);
-      // } 
-      // printf("\n");
-    // }
+    if (debugOpOrder && worker.op == 225) {
+      printf("op %d result:\n", worker.op);
+      for (int i = worker.pos1; i < worker.pos2; i++) {
+          printf("%02X ", worker.step_3[i]);
+      } 
+      printf("\n");
+    }
 
     // if (op == 53) {
     //   std::cout << hexStr(worker.step_3, 256) << std::endl << std::endl;
@@ -7374,6 +7406,8 @@ void branchComputeCPU(workerData &worker)
   }
 }
 
+#if defined(__AVX2__)
+
 void branchComputeCPU_optimized(workerData &worker)
 {
   while (true)
@@ -7383,7 +7417,7 @@ void branchComputeCPU_optimized(workerData &worker)
     // printf("%d worker.random_switcher %d %08jx\n", worker.tries, worker.random_switcher, worker.random_switcher);
 
     worker.op = static_cast<byte>(worker.random_switcher);
-    // if (debugOpOrder) worker.opsB.push_back(worker.op);
+    if (debugOpOrder) worker.opsB.push_back(worker.op);
 
     // printf("op: %d\n", worker.op);
 
@@ -7400,13 +7434,13 @@ void branchComputeCPU_optimized(workerData &worker)
       worker.pos2 = worker.pos1 + ((worker.pos2 - worker.pos1) & 0x1f);
     }
 
-    // if (debugOpOrder) {
-      // printf("SIMD pre op %d:\n", worker.op);
-      // for (int i = worker.pos1; i < worker.pos2; i++) {
-      //     printf("%02X ", worker.step_3[i]);
-      // } 
-      // printf("\n");
-    // }
+    if (debugOpOrder && worker.op == 225) {
+      printf("SIMD pre op %d:\n", worker.op);
+      for (int i = worker.pos1; i < worker.pos2; i++) {
+          printf("%02X ", worker.step_3[i]);
+      } 
+      printf("\n");
+    }
     // fmt::printf("op: %d, ", worker.op);
     // fmt::printf("worker.pos1: %d, worker.pos2: %d\n", worker.pos1, worker.pos2);
 
@@ -10808,6 +10842,10 @@ void branchComputeCPU_optimized(workerData &worker)
   }
 }
 
+#endif
+
+// Compute the new values for worker.step_3 using layered lookup tables instead of
+// branched computational operations
 
 void lookupCompute(workerData &worker)
 {
@@ -10818,7 +10856,7 @@ void lookupCompute(workerData &worker)
     // printf("%d worker.random_switcher %d %08jx\n", worker.tries, worker.random_switcher, worker.random_switcher);
 
     worker.op = static_cast<byte>(worker.random_switcher);
-    // if (debugOpOrder) worker.opsB.push_back(worker.op);
+    if (debugOpOrder) worker.opsB.push_back(worker.op);
 
     // printf("op: %d\n", worker.op);
 
@@ -10842,13 +10880,13 @@ void lookupCompute(workerData &worker)
     // __builtin_prefetch(&worker.step_3[worker.pos1], 0, 0);
     // __builtin_prefetch(&worker.lookup[lookupIndex(worker.op,0,otherpos)]);
 
-    // if (debugOpOrder) {
-      // printf("Lookup pre op %d:\n", worker.op);
-      // for (int i = worker.pos1; i < worker.pos2; i++) {
-      //     printf("%02X ", worker.step_3[i]);
-      // } 
-      // printf("\n");
-    // }
+    if (debugOpOrder && worker.op == 225) {
+      printf("Lookup pre op %d:\n", worker.op);
+      for (int i = worker.pos1; i < worker.pos2; i++) {
+          printf("%02X ", worker.step_3[i]);
+      } 
+      printf("\n");
+    }
     // fmt::printf("op: %d, ", worker.op);
     // fmt::printf("worker.pos1: %d, worker.pos2: %d\n", worker.pos1, worker.pos2);
 
@@ -10875,26 +10913,114 @@ void lookupCompute(workerData &worker)
     }
     {
       bool use2D = std::find(worker.branchedOps, worker.branchedOps + branchedOps_size, worker.op) == worker.branchedOps + branchedOps_size;
-      byte *lookup = use2D ? &worker.lookup2D[0] : &worker.lookup3D[0];
+      uint16_t *lookup2D = use2D ? &worker.lookup2D[0] : nullptr;
+      byte *lookup3D = use2D ? nullptr : &worker.lookup3D[0];
 
       int firstIndex;
+      __builtin_prefetch(&worker.step_3[worker.pos1],0,3);
       if (use2D) {
-        firstIndex = worker.reg_idx[worker.op]*256;
+        firstIndex = worker.reg_idx[worker.op]*(256*256);
+        int n = 0;
+
+        // Manually unrolled loops for repetetive efficiency. Worst possible loop count for 2D
+        // lookups is now 4, with less than 4 being pretty common.
+
+        //TODO: debug loop below to enable complete unrolling
+
+        // Groups of 8
+        for (int i = worker.pos1; i < worker.pos2-7; i += 8) {
+          if (i < worker.pos1+16) __builtin_prefetch(&lookup2D[firstIndex + 256*n++],0,3);
+          uint32_t val1 = (lookup2D[(firstIndex + (worker.step_3[i+1] << 8)) | worker.step_3[i]]) |
+            (lookup2D[(firstIndex + (worker.step_3[i+3] << 8)) | worker.step_3[i+2]] << 16);
+          uint32_t val2 =(lookup2D[(firstIndex + (worker.step_3[i+5] << 8)) | worker.step_3[i+4]]) |
+            (lookup2D[(firstIndex + (worker.step_3[i+7] << 8)) | worker.step_3[i+6]] << 16);
+
+          uint64_t combo = val1 | ((uint64_t)val2 << 32);
+
+          memcpy(&worker.step_3[i], &combo, sizeof(uint64_t));
+        }
+
+        // Groups of 4
+        for (int i = worker.pos2-((worker.pos2-worker.pos1)%8); i < worker.pos2-3; i += 4) {
+          if (i < worker.pos1+8) __builtin_prefetch(&lookup2D[firstIndex + 256*n++],0,3);
+          uint32_t val = lookup2D[(firstIndex + (worker.step_3[i+1] << 8)) | worker.step_3[i]] |
+            (lookup2D[(firstIndex + (worker.step_3[i+3] << 8)) | worker.step_3[i+2]] << 16);
+          memcpy(&worker.step_3[i], &val, sizeof(uint32_t));
+        }
+
+        // Groups of 2
+        for (int i = worker.pos2-((worker.pos2-worker.pos1)%4); i < worker.pos2-1; i += 2) {
+          if (i < worker.pos1+8) __builtin_prefetch(&lookup2D[firstIndex + 256*n++],0,3);
+          uint16_t val = lookup2D[(firstIndex + (worker.step_3[i+1] << 8)) | worker.step_3[i]];
+          memcpy(&worker.step_3[i], &val, sizeof(uint16_t));
+        }
+
+        // Last if odd
+        if ((worker.pos2-worker.pos1)%2 != 0) {
+          uint16_t val = lookup2D[firstIndex + (worker.step_3[worker.pos2-1] << 8)];
+          worker.step_3[worker.pos2-1] = (val & 0xFF00) >> 8;
+        }
       } else {
         firstIndex = worker.branched_idx[worker.op]*256*256 + worker.step_3[worker.pos2]*256;
-      }
-      __builtin_prefetch(&worker.step_3[worker.pos1],0,3);
-      int n = 0;
-      for (int i = worker.pos1; i < worker.pos2-3; i += 4) {
-        if (i < worker.pos1+16) __builtin_prefetch(&lookup[firstIndex + 64*n++],0,3);
-        worker.step_3[i] = lookup[firstIndex + worker.step_3[i]];
-        worker.step_3[i+1] = lookup[firstIndex + worker.step_3[i+1]];
-        worker.step_3[i+2] = lookup[firstIndex + worker.step_3[i+2]];
-        worker.step_3[i+3] = lookup[firstIndex + worker.step_3[i+3]];
-      }
-      if ((worker.pos2-worker.pos1)%4 != 0) {
-        for(int i = worker.pos2-(worker.pos2-worker.pos1)%4; i < worker.pos2; i++) {
-          worker.step_3[i] = lookup[firstIndex + worker.step_3[i]];
+        int n = 0;
+
+        // Manually unrolled loops for repetetive efficiency. Worst possible loop count for 3D
+        // lookups is now 4, with less than 4 being pretty common.
+
+        // Groups of 16
+        for(int i = worker.pos1; i < worker.pos2-15; i += 16) {
+          __builtin_prefetch(&lookup3D[firstIndex + 64*n++],0,3);
+          worker.step_3[i] = lookup3D[firstIndex + worker.step_3[i]];
+          worker.step_3[i+1] = lookup3D[firstIndex + worker.step_3[i+1]];
+          worker.step_3[i+2] = lookup3D[firstIndex + worker.step_3[i+2]];
+          worker.step_3[i+3] = lookup3D[firstIndex + worker.step_3[i+3]];
+          worker.step_3[i+4] = lookup3D[firstIndex + worker.step_3[i+4]];
+          worker.step_3[i+5] = lookup3D[firstIndex + worker.step_3[i+5]];
+          worker.step_3[i+6] = lookup3D[firstIndex + worker.step_3[i+6]];
+          worker.step_3[i+7] = lookup3D[firstIndex + worker.step_3[i+7]];
+
+          worker.step_3[i+8] = lookup3D[firstIndex + worker.step_3[i+8]];
+          worker.step_3[i+9] = lookup3D[firstIndex + worker.step_3[i+9]];
+          worker.step_3[i+10] = lookup3D[firstIndex + worker.step_3[i+10]];
+          worker.step_3[i+11] = lookup3D[firstIndex + worker.step_3[i+11]];
+          worker.step_3[i+12] = lookup3D[firstIndex + worker.step_3[i+12]];
+          worker.step_3[i+13] = lookup3D[firstIndex + worker.step_3[i+13]];
+          worker.step_3[i+14] = lookup3D[firstIndex + worker.step_3[i+14]];
+          worker.step_3[i+15] = lookup3D[firstIndex + worker.step_3[i+15]];
+        }
+
+        // Groups of 8
+        for(int i = worker.pos2-((worker.pos2-worker.pos1)%16); i < worker.pos2-7; i += 8) {
+          __builtin_prefetch(&lookup3D[firstIndex + 64*n++],0,3);
+          worker.step_3[i] = lookup3D[firstIndex + worker.step_3[i]];
+          worker.step_3[i+1] = lookup3D[firstIndex + worker.step_3[i+1]];
+          worker.step_3[i+2] = lookup3D[firstIndex + worker.step_3[i+2]];
+          worker.step_3[i+3] = lookup3D[firstIndex + worker.step_3[i+3]];
+          worker.step_3[i+4] = lookup3D[firstIndex + worker.step_3[i+4]];
+          worker.step_3[i+5] = lookup3D[firstIndex + worker.step_3[i+5]];
+          worker.step_3[i+6] = lookup3D[firstIndex + worker.step_3[i+6]];
+          worker.step_3[i+7] = lookup3D[firstIndex + worker.step_3[i+7]];
+        }
+
+        // Groups of 4
+        for(int i = worker.pos2-((worker.pos2-worker.pos1)%8); i < worker.pos2-3; i+= 4) {
+          if (i < worker.pos1+16) __builtin_prefetch(&lookup3D[firstIndex + 64*n++],0,3);
+          worker.step_3[i] = lookup3D[firstIndex + worker.step_3[i]];
+          worker.step_3[i+1] = lookup3D[firstIndex + worker.step_3[i+1]];
+          worker.step_3[i+2] = lookup3D[firstIndex + worker.step_3[i+2]];
+          worker.step_3[i+3] = lookup3D[firstIndex + worker.step_3[i+3]];
+        }
+
+        // Groups of 2
+        for(int i = worker.pos2-((worker.pos2-worker.pos1)%4); i < worker.pos2-1; i+= 2) {
+          if (i < worker.pos1+8) __builtin_prefetch(&lookup3D[firstIndex + 64*n++],0,3);
+          worker.step_3[i] = lookup3D[firstIndex + worker.step_3[i]];
+          worker.step_3[i+1] = lookup3D[firstIndex + worker.step_3[i+1]];
+        }
+
+        // Last if odd
+        if ((worker.pos2-worker.pos1)%2 != 0) {
+          worker.step_3[worker.pos2-1] = lookup3D[firstIndex + worker.step_3[worker.pos2-1]];
         }
       }
       if (worker.op == 0) {
@@ -10908,13 +11034,13 @@ void lookupCompute(workerData &worker)
     }
 
 after:
-    // if (debugOpOrder) {
-    //   printf("Lookup op %d result:\n", worker.op);
-    //   for (int i = worker.pos1; i < worker.pos2; i++) {
-    //       printf("%02X ", worker.step_3[i]);
-    //   } 
-    //   printf("\n");
-    // }
+    if (debugOpOrder && worker.op == 225) {
+      printf("Lookup op %d result:\n", worker.op);
+      for (int i = worker.pos1; i < worker.pos2; i++) {
+          printf("%02X ", worker.step_3[i]);
+      } 
+      printf("\n");
+    }
 
     // if (op == 53) {
     //   std::cout << hexStr(worker.step_3, 256) << std::endl << std::endl;

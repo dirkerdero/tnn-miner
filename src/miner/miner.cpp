@@ -96,11 +96,12 @@ std::string devBlob;
 bool submitting = false;
 bool submittingDev = false;
 
-byte lookup3D_global[branchedOps_size*256*256];
+uint16_t *lookup2D_global; // Storage for computed values of 2-byte chunks
+byte *lookup3D_global; // Storage for deterministically computed values of 1-byte chunks
 
 int jobCounter;
-boost::atomic<int64_t> counter = 0;
-boost::atomic<int64_t> benchCounter = 0;
+std::atomic<int64_t> counter = 0;
+std::atomic<int64_t> benchCounter = 0;
 
 int blockCounter;
 int miniBlockCounter;
@@ -425,7 +426,11 @@ int main(int argc, char **argv)
   SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
 #endif
   // Check command line arguments.
-  mpz_pow_ui(oneLsh256.get_mpz_t(), mpz_class(2).get_mpz_t(), 256);
+  lookup2D_global = (uint16_t *)malloc_huge_pages(regOps_size*(256*256)*sizeof(uint16_t));
+  lookup3D_global = (byte *)malloc_huge_pages(branchedOps_size*(256*256)*sizeof(byte));
+  oneLsh256 = Num(1) << 256;
+
+  std::cout << "1<<256 test: " << oneLsh256 << std::endl;
 
   // default values
   bool lockThreads = true;
@@ -533,6 +538,9 @@ int main(int argc, char **argv)
       else if (index == TNN_NO_LOCK)
       {
         lockThreads = false;
+        setcolor(CYAN);
+        printf("CPU affinity has been disabled\n");
+        setcolor(BRIGHT_WHITE);
       }
       else if (index == TNN_SIMD)
       {
@@ -628,7 +636,7 @@ fillBlanks:
   goto Mining;
 Testing:
 {
-  mpz_class diffTest("20000", 10);
+  Num diffTest("20000", 10);
 
   for (int i = 1; i < argc; i++)
   {
@@ -671,15 +679,10 @@ Benchmarking:
   int duration = std::stoi(argv[3]);
   if (argc > 4) 
   {
-    if (argv[4] == options[TNN_NO_LOCK])
-    {
-      lockThreads = false;
-    }
-    if (argv[4] == options[TNN_SIMD])
-    {
-      printf("Use SIMD!\n");
-      useSimd = true;
-    }
+    setcolor(CYAN);
+    printf("CPU affinity has been disabled\n");
+    setcolor(BRIGHT_WHITE);
+    lockThreads = false;
   }
 
   unsigned int n = std::thread::hardware_concurrency();
@@ -748,18 +751,18 @@ Benchmarking:
   if (hashrate >= 1000000)
   {
     double rate = (double)(hashrate / 1000000.0);
-    std::string hrate = fmt::sprintf("%.2f MH/s", rate);
+    std::string hrate = fmt::sprintf("%.3f MH/s", rate);
     std::cout << hrate << std::endl;
   }
   else if (hashrate >= 1000)
   {
     double rate = (double)(hashrate / 1000.0);
-    std::string hrate = fmt::sprintf("%.2f KH/s", rate);
+    std::string hrate = fmt::sprintf("%.3f KH/s", rate);
     std::cout << hrate << std::endl;
   }
   else
   {
-    std::string hrate = fmt::sprintf("%.2f H/s", (double)hashrate);
+    std::string hrate = fmt::sprintf("%.3f H/s", (double)hashrate);
     std::cout << hrate << std::endl;
   }
   boost::this_thread::sleep_for(boost::chrono::milliseconds(100));
@@ -902,7 +905,7 @@ void logSeconds(std::chrono::_V2::system_clock::time_point start_time, int durat
 void update(std::chrono::_V2::system_clock::time_point start_time)
 {
   auto beginning = start_time;
-  boost::this_thread::sleep_for(boost::chrono::milliseconds(125));
+  boost::this_thread::yield();
 
 startReporting:
   while (true)
@@ -934,14 +937,15 @@ startReporting:
       //   rate1min.push_back(currentHashes);
       // }
 
+      float ratio = 1000.0f/milliseconds;
       if (rate30sec.size() <= 30 / reportInterval)
       {
-        rate30sec.push_back(currentHashes);
+        rate30sec.push_back((int64_t)(currentHashes*ratio));
       }
       else
       {
         rate30sec.erase(rate30sec.begin());
-        rate30sec.push_back(currentHashes);
+        rate30sec.push_back((int64_t)(currentHashes*ratio));
       }
 
       int64_t hashrate = 1.0 * std::accumulate(rate30sec.begin(), rate30sec.end(), 0LL) / (rate30sec.size() * reportInterval);
@@ -949,7 +953,7 @@ startReporting:
       if (hashrate >= 1000000)
       {
         double rate = (double)(hashrate / 1000000.0);
-        std::string hrate = fmt::sprintf("HASHRATE %.2f MH/s", rate);
+        std::string hrate = fmt::sprintf("HASHRATE %.3f MH/s", rate);
         mutex.lock();
         setcolor(BRIGHT_WHITE);
         std::cout << "\r" << std::setw(2) << std::setfill('0') << consoleLine;
@@ -959,7 +963,7 @@ startReporting:
       else if (hashrate >= 1000)
       {
         double rate = (double)(hashrate / 1000.0);
-        std::string hrate = fmt::sprintf("HASHRATE %.2f KH/s", rate);
+        std::string hrate = fmt::sprintf("HASHRATE %.3f KH/s", rate);
         mutex.lock();
         setcolor(BRIGHT_WHITE);
         std::cout << "\r" << std::setw(2) << std::setfill('0') << consoleLine;
@@ -968,7 +972,7 @@ startReporting:
       }
       else
       {
-        std::string hrate = fmt::sprintf("HASHRATE %.2f H/s", (double)hashrate, hrate);
+        std::string hrate = fmt::sprintf("HASHRATE %.0f H/s", (double)hashrate, hrate);
         mutex.lock();
         setcolor(BRIGHT_WHITE);
         std::cout << "\r" << std::setw(2) << std::setfill('0') << consoleLine;
@@ -1205,11 +1209,11 @@ void benchmark(int tid)
   byte powHash2[32];
   workerData *worker = (workerData *)malloc_huge_pages(sizeof(workerData));
   initWorker(*worker);
-  lookupGen(*worker, lookup3D_global);
+  lookupGen(*worker, lookup2D_global, lookup3D_global);
 
   workerData *worker2 = (workerData *)malloc_huge_pages(sizeof(workerData));
   initWorker(*worker2);
-  lookupGen(*worker2, lookup3D_global);
+  lookupGen(*worker2, lookup2D_global, lookup3D_global);
   // workerData *worker = new workerData();
 
   while (!isConnected)
@@ -1243,8 +1247,8 @@ void benchmark(int tid)
       }
       AstroBWTv3(work, MINIBLOCK_SIZE, powHash, *worker, useSimd);
 
-      counter.store(counter + 1);
-      benchCounter.store(benchCounter + 1);
+      counter.fetch_add(1);
+      benchCounter.fetch_add(1);
       if (stopBenchmark)
         break;
     }
@@ -1275,7 +1279,7 @@ void mineBlock(int tid)
 
   workerData *worker = (workerData *)malloc_huge_pages(sizeof(workerData));
   initWorker(*worker);
-  lookupGen(*worker, lookup3D_global);
+  lookupGen(*worker, lookup2D_global, lookup3D_global);
 
   // std::cout << *worker << std::endl;
 
@@ -1328,7 +1332,7 @@ waitForJob:
       bool devMine = false;
       bool submit = false;
       uint64_t DIFF;
-      mpz_class cmpDiff;
+      Num cmpDiff;
       // DIFF = 5000;
 
       std::string hex;
@@ -1355,7 +1359,7 @@ waitForJob:
 
         AstroBWTv3(&WORK[0], MINIBLOCK_SIZE, powHash, *worker, useSimd);
         
-        counter.store(counter + 1);
+        counter.fetch_add(1);
         submit = devMine ? !submittingDev : !submitting;
         if (submit && CheckHash(powHash, cmpDiff))
         {
