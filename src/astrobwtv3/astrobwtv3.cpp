@@ -3481,7 +3481,7 @@ void optest(int op, workerData &worker, bool print=true) {
     for (int i = worker.pos1; i < worker.pos1 + 32; i++) {
       printf("%02x ", worker.step_3[i]);
     }
-    printf("\n took %dns\n------------\n", time.count());
+    printf("\n took %ldns\n------------\n", time.count());
   }
 }
 
@@ -7082,7 +7082,7 @@ void optest_simd(int op, workerData &worker, bool print=true) {
     for (int i = worker.pos1; i < worker.pos1 + 32; i++) {
       printf("%02x ", worker.step_3[i]);
     }
-    printf("\n took %dns\n", time.count());
+    printf("\n took %ldns\n", time.count());
   }
 }
 #endif
@@ -7163,7 +7163,7 @@ void optest_lookup(int op, workerData &worker, bool print=true) {
     for (int i = worker.pos1; i < worker.pos1 + 32; i++) {
       printf("%02x ", worker.step_3[i]);
     }
-    printf("\n took %dns\n------------\n", time.count());
+    printf("\n took %ldns\n------------\n", time.count());
   }
 }
 
@@ -7700,7 +7700,7 @@ void AstroBWTv3(byte *input, int inputLen, byte *outputhash, workerData &worker,
 
     hashSHA256(worker.sha256, input, worker.sha_key, inputLen);
 
-    worker.salsa20 = (worker.sha_key);
+    worker.salsa20 = ucstk::Salsa20(worker.sha_key);
     worker.salsa20.setIv(worker.counter);
 
     __builtin_prefetch(worker.sData, 0, 3);
@@ -7708,7 +7708,8 @@ void AstroBWTv3(byte *input, int inputLen, byte *outputhash, workerData &worker,
     __builtin_prefetch(worker.sData + 128, 0, 3);
     __builtin_prefetch(worker.sData + 192, 0, 3);
 
-    worker.salsa20.processBytes(worker.sData, worker.sData, 256);
+    worker.salsa20.processBytes(worker.sData, worker.salsaOut, 256);
+    memcpy(worker.sData, worker.salsaOut, sizeof(worker.salsaOut));
 
     RC4_set_key(&worker.key, 256,  worker.sData);
     RC4(&worker.key, 256, worker.sData,  worker.sData);
@@ -7744,7 +7745,7 @@ void AstroBWTv3(byte *input, int inputLen, byte *outputhash, workerData &worker,
     // auto time = std::chrono::duration_cast<std::chrono::nanoseconds>(end-start);
     // if (!lookupMine) printf("AVX2: ");
     // else printf("Lookup: ");
-    // printf("branched section took %dns\n", time.count());
+    // printf("branched section took %ldns\n", time.count());
     // if (debugOpOrder) {
     //   if (lookupMine) {
     //     printf("Lookup Table:\n-----------\n");

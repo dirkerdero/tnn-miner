@@ -139,6 +139,7 @@ public:
   byte sha_key[32];
   byte sha_key2[32];
   byte sData[MAX_LENGTH+64];
+  byte salsaOut[MAX_LENGTH+64];
 
   byte counter[64];
 

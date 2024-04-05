@@ -412,7 +412,7 @@ int main(int argc, char **argv)
   SetConsoleOutputCP(CP_UTF8);
 #endif
   setcolor(BRIGHT_WHITE);
-  printf(TNN);
+  printf("%s", TNN);
   boost::this_thread::sleep_for(boost::chrono::seconds(1));
 #if defined(_WIN32)
   SetConsoleOutputCP(CP_UTF8);
@@ -537,7 +537,8 @@ int main(int argc, char **argv)
     goto Benchmarking;
   }
 
-fillBlanks:
+// We aren't testing or benchmarking, so start propmting
+//fillBlanks:
 {
   printf("%s\n", inputIntro);
   std::vector<std::string *> stringParams = {&host, &port, &wallet};
@@ -964,10 +965,10 @@ void setPriority(boost::thread::native_handle_type t, int priority)
 
 #else
   // Get the native handle of the thread
-  pthread_t threadHandle = t;
+  //pthread_t threadHandle = t;
 
   // Set the thread priority
-  int threadPriority = priority;
+  //int threadPriority = priority;
   // do nothing
 
 #endif
