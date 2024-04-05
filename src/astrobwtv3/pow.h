@@ -471,10 +471,17 @@ inline void insertElement(T* arr, int& size, int capacity, int index, const T& e
 }
 
 void processAfterMarker(workerData& worker);
+
+// Lookup
 void lookupCompute(workerData &worker);
-void lookupCompute_SA(workerData &worker);
+
+// Unused - 2024-04-05
+//void lookupCompute_SA(workerData &worker);
+
+// Normal (control)
 void branchComputeCPU(workerData &worker);
 
+// SIMD
 void branchComputeCPU_avx2(workerData &worker);
 void branchComputeCPU_avx(workerData &worker);
 void branchComputeCPU_sse2(workerData &worker);

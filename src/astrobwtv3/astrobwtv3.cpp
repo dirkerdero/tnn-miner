@@ -7498,8 +7498,9 @@ void runDivsufsortBenchmark() {
   std::cout << "Average DC3 time:       " << saislcpAverage << " seconds" << std::endl;
 }
 
-void TestAstroBWTv3()
+int TestAstroBWTv3()
 {
+  int numTestFail = 0;
   std::srand(1);
   int n = -1;
   workerData *worker = (workerData *)malloc_huge_pages(sizeof(workerData));
@@ -7525,7 +7526,12 @@ void TestAstroBWTv3()
     std::string s = hexStr(res, 32);
     if (s.c_str() != t.out)
     {
-      printf("FAIL. Pow function: pow(%s) = %s want %s\n", t.in.c_str(), s.c_str(), t.out.c_str());
+      if(t.expectFail) {
+        printf("SUCCESS! Pow function failed as expected! (%s) -> %s != %s\n", t.in.c_str(), s.c_str(), t.out.c_str());
+      } else {
+        printf("FAIL. Pow function: pow(%s) -> %s != %s\n", t.in.c_str(), s.c_str(), t.out.c_str());
+        numTestFail++;
+      }
 
       // Section below is for debugging modifications to the branched compute operation
 
@@ -7542,7 +7548,7 @@ void TestAstroBWTv3()
     }
     else
     {
-      printf("SUCCESS! pow(%s) = %s want %s\n", t.in.c_str(), s.c_str(), t.out.c_str());
+      printf("SUCCESS! pow(%s) -> %s want %s\n", t.in.c_str(), s.c_str(), t.out.c_str());
     }
 
     delete[] buf;
@@ -7559,7 +7565,7 @@ void TestAstroBWTv3()
 
   printf("A: %s, B: %s\n", hexStr(data, 48).c_str(), hexStr(data2, 48).c_str());
 
-  TestAstroBWTv3repeattest();
+  numTestFail += TestAstroBWTv3repeattest();
 
   // for (int i = 0; i < 1024; i++)
   // {
@@ -7591,10 +7597,12 @@ void TestAstroBWTv3()
   // std::cout << "Repeated test over" << std::endl;
   // libcubwt_free_device_storage(storage);
   // cudaFree(storage);
+  return numTestFail;
 }
 
-void TestAstroBWTv3repeattest()
+int TestAstroBWTv3repeattest()
 {
+  int numTestFail = 0;
   workerData *worker = (workerData *)malloc_huge_pages(sizeof(workerData));
   initWorker(*worker);
   lookupGen(*worker, lookup2D, lookup3D);
@@ -7629,6 +7637,7 @@ void TestAstroBWTv3repeattest()
       if (s != "c392762a462fd991ace791bfe858c338c10c23c555796b50f665b636cb8c8440")
       {
         printf("%d test failed hash %s\n", i, s.c_str());
+        numTestFail=1;
       }
     }
     else
@@ -7638,6 +7647,7 @@ void TestAstroBWTv3repeattest()
     }
   }
   std::cout << "Repeated test over" << std::endl;
+  return numTestFail;
 }
 
 #if defined(__AVX2__)
@@ -7696,7 +7706,7 @@ void AstroBWTv3(byte *input, int inputLen, byte *outputhash, workerData &worker,
 
   try
   {
-    memset(worker.sData, 0, 256);
+    memset(worker.sData, 0, sizeof(worker.sData));
 
     hashSHA256(worker.sha256, input, worker.sha_key, inputLen);
 
@@ -7796,7 +7806,7 @@ void AstroBWTv3(byte *input, int inputLen, byte *outputhash, workerData &worker,
   }
 }
 
-
+// Normal
 void branchComputeCPU(workerData &worker)
 {
   while (true)
@@ -11000,6 +11010,7 @@ void branchComputeCPU(workerData &worker)
 
 #if defined(__AVX2__)
 
+// SIMD
 void branchComputeCPU_avx2(workerData &worker)
 {
   __builtin_prefetch(&worker.maskTable+0,0,3);
@@ -14746,7 +14757,7 @@ void branchComputeCPU_avx2(workerData &worker)
 
 // Compute the new values for worker.step_3 using layered lookup tables instead of
 // branched computational operations
-
+// Lookup
 void lookupCompute(workerData &worker)
 {
   while (true)
@@ -15055,6 +15066,7 @@ after:
   worker.data_len = static_cast<uint32_t>((worker.tries - 4) * 256 + (((static_cast<uint64_t>(worker.chunk[253]) << 8) | static_cast<uint64_t>(worker.chunk[254])) & 0x3ff));
 }
 
+/* // Unused - 2024-04-05
 void lookupCompute_SA(workerData &worker)
 {
   memset(worker.buckets_sizes,0,256);
@@ -15402,3 +15414,5 @@ after:
 
   // libsais(worker.sData, worker.sa, worker.data_len, 0, worker.buckets_sizes);
 }
+
+*/

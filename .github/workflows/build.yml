@@ -64,6 +64,10 @@ jobs:
         cmake ..
         make -j$(nproc)
         tar -zcvf ../tnn-miner.tar.gz Tnn-miner
+    - name: 'Test Tnn-miner'
+      run: |
+        ./build/Tnn-miner --test
+        tar -zcvf ../tnn-miner.tar.gz Tnn-miner
     - name: Release
       uses: softprops/action-gh-release@v2
       if: startsWith(github.ref, 'refs/tags/')

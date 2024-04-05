@@ -625,11 +625,12 @@ Testing:
       runOpTests(testOp);
     }
   }
-  TestAstroBWTv3();
+  int numTestFail = TestAstroBWTv3();
   // TestAstroBWTv3_cuda();
   // TestAstroBWTv3repeattest();
-  boost::this_thread::sleep_for(boost::chrono::seconds(3));
-  return 0;
+  boost::this_thread::sleep_for(boost::chrono::seconds(1));
+  std::cout << "Test exiting with exit code: " << numTestFail << std::endl;
+  return numTestFail;
 }
 Benchmarking:
 {
