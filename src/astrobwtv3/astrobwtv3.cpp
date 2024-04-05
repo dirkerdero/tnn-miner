@@ -3501,6 +3501,7 @@ void optest(int op, workerData &worker, bool print=true) {
   }
 }
 
+#if defined(__AVX2__)
 void optest_simd(int op, workerData &worker, bool print=true) {
   if (print){
     printf("SIMD\npre op %d: ", op);
@@ -7100,6 +7101,7 @@ void optest_simd(int op, workerData &worker, bool print=true) {
     printf("\n took %dns\n", time.count());
   }
 }
+#endif
 
 void optest_lookup(int op, workerData &worker, bool print=true) {
   if (print){
@@ -7215,12 +7217,14 @@ void runOpTests(int op, int len) {
   // WARMUP, don't print times
   optest(op, *worker);
 
+#if defined(__AVX2__)
   // WARMUP, don't print times
   memcpy(&worker->step_3, test,  16);
   // optest_simd(0, *worker, false);
   optest_simd(op, *worker, false);
   // Primary benchmarking
   optest_simd(op, *worker);
+#endif
 
   // WARMUP, don't print times
   memcpy(&worker->step_3, test,  16);
@@ -7234,8 +7238,10 @@ void runOpTests(int op, int len) {
     memset(&worker2->step_3, 0, 256);
     memcpy(&worker->step_3, test, len+1);
     optest(i, *worker, false);
+ #if defined(__AVX2__)
     memcpy(&worker2->step_3, test, len+1);
     optest_simd(i, *worker2, false);
+ #endif
 
     std::string str1 = hexStr(&(*worker).step_3[0], len);
     std::string str2 = hexStr(&(*worker2).step_3[0], len);
@@ -7740,7 +7746,11 @@ void AstroBWTv3(byte *input, int inputLen, byte *outputhash, workerData &worker,
     }
     else {
       // start = std::chrono::steady_clock::now();
+ #if defined(__AVX2__)
       branchComputeCPU_optimized(worker);
+ #else
+      lookupCompute(worker);
+ #endif
       // end = std::chrono::steady_clock::now();
     }
     
