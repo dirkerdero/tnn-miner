@@ -98,8 +98,8 @@ int sufcheck(int A[], int B[])	{ int *x;
 #endif
 
 void encode(workerData &worker) {
-    REGISTER uchar cl, *fly;
-    REGISTER int i, pos, lim;
+    uchar cl, *fly;
+    int i, pos, lim;
     worker.baza = -1; // Radix sort
     memset(r, 0, sizeof(trax2));
     worker.sfin = worker.bin + worker.data_len; //scan
@@ -195,7 +195,7 @@ void lazy_ray(workerData &worker, int A[], const int num, uchar bof[])	{
 	call_lazy_ray++; assert(lucky);
 	lcp[0] = 0; s = A[0];
 	for(i=1; i<num; i++)	{ short last = 0;
-		REGISTER uchar *a = A[i]+bof, *b = s+bof;;
+		uchar *a = A[i]+bof, *b = s+bof;;
 		while(p4b(a)==p4b(b) && ++last<LENMAX) a-=4,b-=4;
 		lcp[i] = (p4b(a) > p4b(b) ? LENMAX-last : last-LENMAX);
 	}//qsort
@@ -206,7 +206,7 @@ void lazy_ray(workerData &worker, int A[], const int num, uchar bof[])	{
 /*
 *	isab - smart string compare routine
 */
-int isab(REGISTER uchar *a,REGISTER uchar *b)	{
+int isab(uchar *a,uchar *b)	{
 	int cof,i; uchar *bx;
 	cof = (a>b ? (bx=a)-b : (bx=b)-a);
 	//if(!cof) return -1;
@@ -251,14 +251,14 @@ int median(int a,int b,int c,uchar bof[])	{
 *	key is uint64 instead of uint32
 */
 void deep_ray(workerData &worker, int *A, int *B, uchar *boff)	{
-	REGISTER int *x,*y,*z; ulong w,w2;
+	int *x,*y,*z; ulong w,w2;
 	call_deep_ray++; assert(lucky);
 	while(B-A > INSERT)	{
 		int s = median(A[0],A[B-A>>1],B[-1],boff);
 		x=A; y=A; z=B; w = p4b(s+boff);
 		w2 = p4b(s-4+boff);
 		while(y<z)	{
-			REGISTER uint q;
+			uint q;
 			s = *y; q = p4b(s+boff);
 			if(q == w)	{
 				q = p4b(s-4+boff);
@@ -418,12 +418,12 @@ void digger(workerData &worker, int A[], int B[], uchar bof[])	{
 *	calls 'digger' to sort bad substrings
 */
 void smart_ins(workerData &worker, int A[], int B[], uchar *bof)	{
-	REGISTER int *x=A+1,*z;
+	int *x=A+1,*z;
 	int badcase = 0;
 	do	{ int s = *x; z=x-1;
 		do	{
 			int limit = (DEEP+3)>>2;
-			REGISTER uchar *a,*b;
+			uchar *a,*b;
 			a = bof + z[0]; b = bof+s;
 			while(p4b(a)==p4b(b) && --limit) a-=4,b-=4;
 			if(p4b(a) < p4b(b)) break;
@@ -449,8 +449,8 @@ void smart_ins(workerData &worker, int A[], int B[], uchar *bof)	{
 *	ray - the modified mkqsort
 *	deep = bin-boff, dword comparsions
 */
-void ray(workerData &worker, int *A, int *B, REGISTER uchar *boff)	{
-	REGISTER int *x,*y,*z;
+void ray(workerData &worker, int *A, int *B, uchar *boff)	{
+	int *x,*y,*z;
 	while(B-A > INSERT)	{
 		int s = median(A[0],A[B-A>>1],B[-1],boff);
 		ulong w = p4b(s+boff);
