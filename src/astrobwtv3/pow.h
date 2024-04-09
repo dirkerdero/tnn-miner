@@ -236,8 +236,7 @@ inline __m256i genMask(workerData &worker, int n){
 
 #endif
 
-inline void initWorker(workerData &worker) {
-  #pragma clang optimize off
+[[clang::optnone]] inline void initWorker(workerData &worker) {
   #if defined(__AVX2__)
 
   __m256i temp[32];
@@ -273,7 +272,7 @@ inline void initWorker(workerData &worker) {
   // }
 
   #endif
-  #pragma clang optimize on
+
   std::copy(branchedOps_global.begin(), branchedOps_global.end(), worker.branchedOps);
   std::vector<byte> full(256);
   std::vector<byte> diff(256);
