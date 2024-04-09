@@ -7740,8 +7740,7 @@ void AstroBWTv3(byte *input, int inputLen, byte *outputhash, workerData &worker,
     __builtin_prefetch(&worker.sData[128], 0, 3);
     __builtin_prefetch(&worker.sData[192], 0, 3);
 
-    worker.salsa20.processBytes(worker.sData, worker.salsaOut, 256);
-    memcpy(worker.sData, worker.salsaOut, sizeof(worker.salsaOut));
+    worker.salsa20.processBytes(worker.sData, worker.sData, 256);
 
     __builtin_prefetch(&worker.key + 8, 0, 3);
     __builtin_prefetch(&worker.key + 8+64, 0, 3);
