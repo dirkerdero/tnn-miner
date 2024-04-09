@@ -30,13 +30,6 @@
 #define LCPART	8
 #define ABIT	7
 
-#if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
-    //C++17 specific stuff here
-    #define REGISTER
-#else
-    #define REGISTER register
-#endif
-
 typedef unsigned char uchar;
 typedef unsigned short ushort;
 typedef unsigned int uint;
