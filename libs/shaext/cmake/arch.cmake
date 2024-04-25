@@ -79,3 +79,6 @@ if(AARCH64)
         message(STATUS "The SHA_EXT implementation is not supported")
     endif()
 endif()
+
+# This exposes the CMAKE_C_FLAGS to the parent CMakeLists.txt file
+set(SHAEXT_FLAGS "${CMAKE_C_FLAGS}" PARENT_SCOPE)

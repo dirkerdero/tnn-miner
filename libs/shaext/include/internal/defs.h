@@ -3,6 +3,11 @@
 
 #pragma once
 
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -200,4 +205,8 @@ extern unsigned int OPENSSL_armcap_P_local;
       OPENSSL_armcap_P_local |= ARMV8_SHA512; \
       {x} CLEAR_OPENSSL_CAP_ARRAY;            \
     } while(0)
+#endif
+
+#ifdef __cplusplus
+}
 #endif

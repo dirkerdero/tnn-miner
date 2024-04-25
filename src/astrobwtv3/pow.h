@@ -32,6 +32,11 @@
 #include "immintrin.h"
 #include "libsais.h"
 
+extern int sha_impl;
+#if defined(SHAEXT_LIBS)
+  #include "libs/shaext/include/sha.h"
+#endif
+
 #ifndef POW_CONST
 #define POW_CONST
 
@@ -415,11 +420,15 @@ inline void prefetch(T *data, int size, int hint) {
   }
 }
 
-inline void hashSHA256(SHA256_CTX &sha256, const byte *input, byte *digest, unsigned long inputSize)
+inline void hashSHA256(SHA256_CTX &sha256_ctx, const byte *input, byte *digest, unsigned long inputSize)
 {
-  SHA256_Init(&sha256);
-  SHA256_Update(&sha256, input, inputSize);
-  SHA256_Final(digest, &sha256);
+  #if defined(SHAEXT_LIBS)
+    sha256(digest, input, inputSize, (sha_impl_e)sha_impl);
+  #else
+    SHA256_Init(&sha256_ctx);
+    SHA256_Update(&sha256_ctx, input, inputSize);
+    SHA256_Final(digest, &sha256_ctx);
+  #endif
 }
 
 inline std::vector<uint8_t> padSHA256Input(const uint8_t* input, size_t length) {

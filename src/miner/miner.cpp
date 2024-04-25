@@ -40,6 +40,7 @@
 
 #include <hex.h>
 #include <pow.h>
+int sha_impl = 0;
 // #include <astrobwtv3_cuda.cuh>
 #include <powtest.h>
 #include <thread>
@@ -451,7 +452,7 @@ int main(int argc, char **argv)
   SetConsoleOutputCP(CP_UTF8);
 #endif
   setcolor(BRIGHT_WHITE);
-  printf(TNN);
+  printf("%s", TNN);
   boost::this_thread::sleep_for(boost::chrono::seconds(1));
 #if defined(_WIN32)
   SetConsoleOutputCP(CP_UTF8);
@@ -564,7 +565,51 @@ int main(int argc, char **argv)
     printf("Use Lookup\n");
     useLookupMine = true;
   }
-  
+
+  #if defined(SHAEXT_LIBS)
+    auto start_time = std::chrono::steady_clock::now();
+    auto end_time = std::chrono::steady_clock::now();
+
+    int64_t implTimes[sha_impl_e::SHA_EXT_IMPL_COUNT+1] = {0};
+    byte digest[32];
+    byte input[48] = {0};
+    int inputSize = 48;
+
+    SHA256_CTX sha256_ctx;
+    for(int i = sha_impl_e::GENERIC_IMPL; i <= sha_impl_e::SHA_EXT_IMPL_COUNT; i++) {
+      //printf("impl: %d\n", i);
+      start_time = std::chrono::steady_clock::now();
+      for(int x = 0; x < 100; x++) {
+      // TODO: Find optimal SHA impl for initial 48-byte sh  
+        if(i == sha_impl_e::SHA_EXT_IMPL_COUNT) {
+          SHA256_Init(&sha256_ctx);
+          SHA256_Update(&sha256_ctx, input, inputSize);
+          SHA256_Final(digest, &sha256_ctx);
+        } else {
+          sha256(digest, input, inputSize, (sha_impl_e)i);
+        }
+      }
+      end_time = std::chrono::steady_clock::now();
+      auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end_time - start_time).count();
+      implTimes[i] = ns;
+    }
+    int64_t lowest_ms = implTimes[0];
+    sha_impl = 0;
+    //int use_impl = 0;
+    for(int i = sha_impl_e::GENERIC_IMPL; i <= sha_impl_e::SHA_EXT_IMPL_COUNT; i++) {
+      if (vm.count("shaext")) {
+        printf("Impl: %d = %ld ns\n", i, implTimes[i]);
+      }
+      if(implTimes[i] < lowest_ms) {
+        lowest_ms = implTimes[i];
+        sha_impl = i;
+      }
+    }
+    if (vm.count("shaext")) {
+      printf("Use SHA IMPL: %d\n", sha_impl);
+    }
+  #endif
+
   // Ensure we capture *all* of the other options before we start using goto
   if (vm.count("test")) {
     goto Testing;

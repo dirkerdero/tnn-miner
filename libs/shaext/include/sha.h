@@ -3,6 +3,11 @@
 
 #pragma once
 
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
 #include "internal/defs.h"
 
 typedef enum sha_impl_e
@@ -37,7 +42,7 @@ typedef enum sha_impl_e
   SHA_EXT_IMPL,
   OPENSSL_SHA_EXT_IMPL,
 #endif
-
+  SHA_EXT_IMPL_COUNT
 } sha_impl_t;
 
 #define SHA256_HASH_BYTE_LEN 32
@@ -52,3 +57,7 @@ void sha512(OUT uint8_t *dgst,
             IN const uint8_t *data,
             IN size_t         byte_len,
             IN sha_impl_t     impl);
+
+#ifdef __cplusplus
+}
+#endif

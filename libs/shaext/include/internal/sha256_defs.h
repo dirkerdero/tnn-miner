@@ -3,6 +3,11 @@
 
 #pragma once
 
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
 #include "sha.h"
 
 typedef uint32_t sha256_word_t;
@@ -122,3 +127,7 @@ void sha256_compress_aarch64_sha_ext(IN OUT sha256_state_t *state,
 extern void sha256_block_data_order_local(IN OUT sha256_word_t *state,
                                           IN const uint8_t *data,
                                           IN size_t         blocks_num);
+
+#ifdef __cplusplus
+}
+#endif

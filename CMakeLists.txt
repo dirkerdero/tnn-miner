@@ -21,6 +21,8 @@ set(CMAKE_EXE_LINKER_FLAGS "-fuse-ld=lld -fstack-protector")
 set (CMAKE_STANDARD_REQUIRED TRUE)
 set (CMAKE_CXX_STANDARD 23)
 
+set (SHAEXT_LIBS FALSE)
+
 project(
   Tnn-miner
   VERSION 0.2.5
@@ -28,6 +30,7 @@ project(
 )
 
 if(WIN32)
+  set (SHAEXT_LIBS FALSE)
   include_directories(
     "C:/mingw64/include"
     "C:/mingw64/x86_64-w64-mingw32/include"
@@ -100,6 +103,16 @@ find_package(Threads REQUIRED)
 
 set(BOOST_INCLUDE_DIRS ${Boost_INCLUDE_DIRS})
 
+if(SHAEXT_LIBS)
+	add_subdirectory("libs/shaext")
+  include_directories("libs/shaext/include")
+  set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -DSHAEXT_LIBS ${SHAEXT_FLAGS}")
+  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -DSHAEXT_LIBS ${SHAEXT_FLAGS}")
+  include_directories(
+    "${PROJECT_SOURCE_DIR}"
+  )
+endif()
+
 include_directories(
   ${PROJECT_SOURCE_DIR}/include
   ${PROJECT_SOURCE_DIR}/include/highwayhash
@@ -124,8 +137,12 @@ file(GLOB all_SRCS
   "${PROJECT_SOURCE_DIR}/src/miner/*.c"
 )
 
-add_definitions(${GTK3_CFLAGS_OTHER})
 add_executable(${PROJECT_NAME} ${all_SRCS})
+
+if(SHAEXT_LIBS)
+  #target_link_libraries(${PROJECT_NAME} -Wl,--whole-archive shaext -Wl,--no-whole-archive)
+  target_link_libraries(${PROJECT_NAME} shaext)
+endif()
 
 if(WIN32)
   target_link_libraries(${PROJECT_NAME} mingw32 wsock32 ws2_32 winpthread)
