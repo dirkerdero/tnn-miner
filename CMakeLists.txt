@@ -104,7 +104,7 @@ find_package(Threads REQUIRED)
 set(BOOST_INCLUDE_DIRS ${Boost_INCLUDE_DIRS})
 
 if(SHAEXT_LIBS)
-	add_subdirectory("libs/shaext")
+  add_subdirectory("libs/shaext")
   include_directories("libs/shaext/include")
   set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -DSHAEXT_LIBS ${SHAEXT_FLAGS}")
   set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -DSHAEXT_LIBS ${SHAEXT_FLAGS}")
