@@ -127,6 +127,7 @@ bool devConnected = false;
 
 using byte = unsigned char;
 int bench_duration = -1;
+bool startBenchmark = false;
 bool stopBenchmark = false;
 //------------------------------------------------------------------------------
 
@@ -653,7 +654,7 @@ int main(int argc, char **argv)
   SetConsoleOutputCP(CP_UTF8);
 #endif
   setcolor(BRIGHT_WHITE);
-  printf(TNN);
+  printf("%s", TNN);
   boost::this_thread::sleep_for(boost::chrono::seconds(1));
 #if defined(_WIN32)
   SetConsoleOutputCP(CP_UTF8);
@@ -909,7 +910,6 @@ Benchmarking:
 
   winMask = std::max(1, winMask);
 
-  auto start_time = std::chrono::steady_clock::now();
   // Create worker threads and set CPU affinity
   for (int i = 0; i < threads; i++)
   {
@@ -935,6 +935,8 @@ Benchmarking:
   {
     boost::this_thread::sleep_for(boost::chrono::milliseconds(100));
   }
+  auto start_time = std::chrono::steady_clock::now();
+  startBenchmark = true;
 
   boost::thread t2(logSeconds, start_time, bench_duration, &stopBenchmark);
   setPriority(t2.native_handle(), THREAD_PRIORITY_TIME_CRITICAL);
@@ -1069,7 +1071,7 @@ int DeroTesting() {
 void logSeconds(std::chrono::_V2::steady_clock::time_point start_time, int duration, bool *stop)
 {
   int i = 0;
-  while (true)
+  while (!(*stop))
   {
     auto now = std::chrono::steady_clock::now();
     auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time).count();
@@ -1081,8 +1083,6 @@ void logSeconds(std::chrono::_V2::steady_clock::time_point start_time, int durat
       printf("\rBENCHMARKING: %d/%d seconds elapsed...", i, duration);
       std::cout << std::flush;
       mutex.unlock();
-      if (i == duration || *stop)
-        break;
       i++;
     }
     boost::this_thread::sleep_for(boost::chrono::milliseconds(250));
@@ -1423,14 +1423,13 @@ void benchmark(int tid)
   initWorker(*worker);
   lookupGen(*worker, lookup2D_global, lookup3D_global);
 
-  workerData *worker2 = (workerData *)malloc_huge_pages(sizeof(workerData));
-  initWorker(*worker2);
-  lookupGen(*worker2, lookup2D_global, lookup3D_global);
-  // workerData *worker = new workerData();
-
   while (!isConnected)
   {
     boost::this_thread::sleep_for(boost::chrono::milliseconds(100));
+  }
+
+  while(!startBenchmark) {
+
   }
 
   work[MINIBLOCK_SIZE - 1] = (byte)tid;

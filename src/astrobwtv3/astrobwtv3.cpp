@@ -7103,7 +7103,7 @@ void optest_simd(int op, workerData &worker, OpTestResult &testRes, bool print=t
     for (int i = worker.pos1; i < worker.pos1 + 32; i++) {
       printf("%02x ", worker.step_3[i]);
     }
-    printf("\n took %dns\n", time.count());
+    printf("\n took %ld ns\n", time.count());
   }
   */
 }
