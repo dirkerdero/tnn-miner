@@ -610,7 +610,11 @@ int main(int argc, char **argv)
   
   // Ensure we capture *all* of the other options before we start using goto
   if (vm.count("dero-test")) {
-    goto Testing;
+    int rc = DeroTesting();
+    if(rc > 255) {
+      rc = 1;
+    }
+    return rc;
   }
   if (vm.count("dero-benchmark")) {
     bench_duration = vm["dero-benchmark"].as<int>();
@@ -619,6 +623,13 @@ int main(int argc, char **argv)
       return 1;
     }
     goto Benchmarking;
+  }
+  if (vm.count("dero-verify")) {
+    int rc = runDeroVerificationTests(useLookupMine, testLen);
+    if(rc > 255) {
+      rc = 1;
+    }
+    return rc;
   }
 
 fillBlanks:
@@ -697,23 +708,6 @@ fillBlanks:
 }
   printf("\n");
   goto Mining;
-Testing:
-{
-  Num diffTest("20000", 10);
-
-  if (testOp >= 0) {
-    if (testLen >= 0) {
-      runOpTests(testOp, testLen);
-    } else {
-      runOpTests(testOp);
-    }
-  }
-  TestAstroBWTv3();
-  // TestAstroBWTv3_cuda();
-  // TestAstroBWTv3repeattest();
-  boost::this_thread::sleep_for(boost::chrono::seconds(3));
-  return 0;
-}
 Benchmarking:
 {
   if(threads <= 0) {
@@ -871,6 +865,25 @@ Mining:
 
   return EXIT_SUCCESS;
   }
+}
+
+int DeroTesting() {
+  int failedTests = 0;
+  Num diffTest("1234567890123456789", 10);
+
+  if (testOp >= 0) {
+    if (testLen >= 0) {
+      failedTests += runDeroOpTests(testOp, testLen);
+    } else {
+      failedTests += runDeroOpTests(testOp);
+    }
+    return failedTests;
+  }
+  failedTests += TestAstroBWTv3();
+  // TestAstroBWTv3_cuda();
+  // TestAstroBWTv3repeattest();
+  //boost::this_thread::sleep_for(boost::chrono::seconds(1));
+  return failedTests;
 }
 
 void logSeconds(std::chrono::_V2::steady_clock::time_point start_time, int duration, bool *stop)

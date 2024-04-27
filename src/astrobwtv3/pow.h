@@ -212,6 +212,9 @@ public:
 template <std::size_t N>
 inline void generateInitVector(std::uint8_t (&iv_buff)[N]);
 
+template <std::size_t N>
+inline void generateRandomBytes(std::uint8_t (&iv_buff)[N]);
+
 #if defined(__AVX2__)
 inline __m256i genMask(int i) {
   __m256i temp = _mm256_setzero_si256(); // Initialize mask with all zeros
@@ -383,6 +386,20 @@ inline void generateInitVector(std::uint8_t (&iv_buff)[N])
   std::generate(std::begin(iv_buff), std::end(iv_buff), rbe);
 }
 
+template <std::size_t N>
+inline void generateRandomBytes(std::uint8_t (&iv_buff)[N])
+{
+  auto const hes = std::random_device{}();
+
+  using random_bytes_engine = std::independent_bits_engine<std::default_random_engine,
+                                                           CHAR_BIT, unsigned short>;
+
+  random_bytes_engine rbe;
+  rbe.seed(hes);
+
+  std::generate(std::begin(iv_buff), std::end(iv_buff), std::ref(rbe));
+}
+
 template <typename T>
 inline void prefetch(T *data, int size, int hint) {
   const size_t prefetch_distance = 256; // Prefetch 8 cache lines ahead
@@ -474,7 +491,7 @@ void lookupCompute(workerData &worker);
 void lookupCompute_SA(workerData &worker);
 void branchComputeCPU(workerData &worker);
 
-void branchComputeCPU_avx2(workerData &worker);
+void branchComputeCPU_avx2(workerData &worker, bool isTest);
 void branchComputeCPU_avx(workerData &worker);
 void branchComputeCPU_sse2(workerData &worker);
 void branchComputeCPU_neon(workerData &worker);
