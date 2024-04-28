@@ -144,7 +144,6 @@ inline po::options_description get_prog_opts()
     ("sabench", "Runs a benchmark for divsufsort on snapshot files in the 'tests' directory")
     ("dero-benchmark", po::value<int>(), "Runs a mining benchmark for <arg> seconds (adheres to -t threads option)")
     ("dero-verify", "Runs DERO verification tests")
-    ("xelis", po::value<std::string>(), "Printf the Xelis-hash result of an input string.")
     ("xelis-bench", "Run a benchmark of xelis-hash with 1 thread")
     ("xelis-test", "Run the xelis-hash tests from the official source code")
   ;
