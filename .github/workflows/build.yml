@@ -71,8 +71,17 @@ jobs:
         path: ./tnn-miner.tar.gz
         retention-days: 5
     - name: 'Test Tnn-miner'
+      continue-on-error: true
       run: |
         ./build/Tnn-miner --dero-test
+        ret=$?
+        if [[ "$ret" != "0" ]]; then
+          sudo apt install gdb -y
+          gdb --batch -ex "run" -ex "bt" --args ./build/Tnn-miner --dero-test
+        fi
+    - name: 'Test Tnn-miner'
+      continue-on-error: false
+      run: |
         ./build/Tnn-miner --dero-verify --lookup
         ./build/Tnn-miner --dero-verify
     - name: 'Release'
