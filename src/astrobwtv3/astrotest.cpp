@@ -26,8 +26,26 @@ void testPopcnt256_epi8() {
     std::cout << "testPopcnt256_epi8 tests passed" << std::endl;
 }
 
-// TODO: Move to powtest.h
-int runDeroVerificationTests(bool useLookup, int dataLen) {
+
+int DeroTesting(int testOp, int testLen) {
+  int failedTests = 0;
+  Num diffTest("1234567890123456789", 10);
+
+  if (testOp >= 0) {
+    if (testLen >= 0) {
+      failedTests += runDeroOpTests(testOp, testLen);
+    } else {
+      failedTests += runDeroOpTests(testOp);
+    }
+    return failedTests;
+  }
+  failedTests += TestAstroBWTv3();
+  // TestAstroBWTv3_cuda();
+
+  return failedTests;
+}
+
+int runDeroVerificationTests(bool useLookup, int dataLen=15) {
   if(dataLen == -1 || dataLen > 255) {
     dataLen = 32;
   }
@@ -109,8 +127,6 @@ int runDeroVerificationTests(bool useLookup, int dataLen) {
   return numOpsFailed;
 }
 
-
-// TODO: Move to powtest.h
 int runDeroOpTests(int op, int len) {
   int opsFailed = 0;
   #if defined(__AVX2__)
@@ -167,7 +183,7 @@ int runDeroOpTests(int op, int len) {
   // benchmarking
   //memset(&worker->step_3, 0, 256);
   //memcpy(&worker->step_3, test, 16);
-  optest_avx2(op, *worker, test, *simdResult);
+  optest_avx2(op, *worker, test, *simdResult, true);
 
   for(int i = 0; i < 256; i++) {
     //memset(&worker->step_3, 0, 256);
@@ -298,7 +314,6 @@ int TestAstroBWTv3()
   return failedTests;
 }
 
-// TODO: Move to powtest.h
 int TestAstroBWTv3repeattest(bool useLookup)
 {
   int rc = 0;

@@ -38,11 +38,11 @@ inline PowTest random_pow_tests[] = {
 };
 
 void runDivsufsortBenchmark();
-int runDeroOpTests(int op, int len=15);
-int runDeroVerificationTests(bool useLookup, int dataLen);
-int TestAstroBWTv3();
-void TestAstroBWTv3_cuda();
-void TestRace_cuda();
-int TestAstroBWTv3repeattest(bool useLookup);
+//int runDeroOpTests(int op, int len=15);
+//int runDeroVerificationTests(bool useLookup, int dataLen);
+//int TestAstroBWTv3();
+//void TestAstroBWTv3_cuda();
+//void TestRace_cuda();
+//int TestAstroBWTv3repeattest(bool useLookup);
 
 #endif

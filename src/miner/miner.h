@@ -170,5 +170,4 @@ void setAffinity(boost::thread::native_handle_type t, int core);
 
 void update(std::chrono::_V2::steady_clock::time_point startTime);
 
-int DeroTesting();
 #endif

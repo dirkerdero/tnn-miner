@@ -7,6 +7,7 @@
 #include "powtest.h"
 #include "lookup.h"
 #include "lookupcompute.h"
+#include "num.h"
 
 #include "hex.h"
 
@@ -17,6 +18,13 @@ struct OpTestResult {
   unsigned char result[256];
   std::chrono::nanoseconds duration_ns;
 };
+
+int DeroTesting(int testOp, int testLen);
+int runDeroOpTests(int op, int len=15);
+int runDeroVerificationTests(bool useLookup, int dataLen);
+
+int TestAstroBWTv3();
+int TestAstroBWTv3repeattest(bool useLookup);
 
 void optest(int op, workerData &worker, byte testData[32], OpTestResult &testRes, bool print=true);
 void optest_lookup(int op, workerData &worker, byte testData[32], OpTestResult &testRes, bool print=true);
