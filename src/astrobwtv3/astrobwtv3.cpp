@@ -7650,29 +7650,23 @@ int TestAstroBWTv3()
 // TODO: Move to powtest.h
 int TestAstroBWTv3repeattest(bool useLookup)
 {
+  int rc = 0;
   workerData *worker = (workerData *)malloc_huge_pages(sizeof(workerData));
   initWorker(*worker);
   lookupGen(*worker, lookup2D, lookup3D);
 
   byte *data = new byte[48];
-  byte random_data[48];
+  byte random_buffer[48];
 
   std::string c("419ebb000000001bbdc9bf2200000000635d6e4e24829b4249fe0e67878ad4350000000043f53e5436cf610000086b00");
   hexstr_to_bytes(c, data);
 
-  std::random_device rd;
-  std::mt19937 gen(rd());
-  std::uniform_int_distribution<uint8_t> dist(0, 255);
-  std::array<byte, 48> buf;
-
   for (int i = 0; i < 1024; i++)
   {
-    std::generate(buf.begin(), buf.end(), [&dist, &gen]()
-                  { return dist(gen); });
-    std::memcpy(random_data, buf.data(), buf.size());
+    generateRandomBytes<48>(random_buffer);
 
     // std::cout << hexStr(data, 48) << std::endl;
-    // std::cout << hexStr(random_data, 48) << std::endl;
+    // std::cout << hexStr(random_buffer, 48) << std::endl;
 
     if (i % 2 == 0)
     {
@@ -7684,15 +7678,17 @@ int TestAstroBWTv3repeattest(bool useLookup)
       if (s != "c392762a462fd991ace791bfe858c338c10c23c555796b50f665b636cb8c8440")
       {
         printf("%d test failed hash %s\n", i, s.c_str());
+        rc = 1;
       }
     }
     else
     {
       byte res[32];
-      AstroBWTv3(buf.data(), 48, res, *worker, false);
+      AstroBWTv3(random_buffer, 48, res, *worker, false);
     }
   }
   std::cout << "Repeated test over" << std::endl;
+  return rc;
 }
 
 #if defined(__AVX2__)
