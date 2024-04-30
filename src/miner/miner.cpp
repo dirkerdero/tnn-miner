@@ -65,6 +65,7 @@
 #include <base64.hpp>
 
 #include <bit>
+#include <broadcastServer.hpp>
 
 #if defined(_WIN32)
 #include <Windows.h>
@@ -580,53 +581,24 @@ void xelis_session(
 
   bool subStart = false;
 
-  // boost::thread submission_thread([&]
-  //                                 {
-  //         bool *C = isDev ? &isConnected : &devConnected;
-  //         bool *B = isDev ? &submittingDev : &submitting;
-
-  //         bool keepLoop = true;
-
-  //         while (true) {
-  //           try {
-  //             if (!(*C)) break;
-  //             if (*B) {
-  //               boost::json::object *S = isDev ? &devShare : &share;
-  //               std::string msg = boost::json::serialize(*S);
-
-  //               // Acquire a lock before writing to the WebSocket
-  //               ws.async_write(boost::asio::buffer(msg), [&](const boost::system::error_code& ec, std::size_t) {
-  //                   if (ec) {
-  //                       setcolor(RED);
-  //                       printf("\nasync_write: submission error\n");
-  //                       setcolor(BRIGHT_WHITE);
-  //                   }
-  //               });
-  //               if (keepLoop == false) break;
-  //               (*B) = false;
-  //             }
-  //           } catch(...){}
-
-  //           boost::this_thread::sleep_for(boost::chrono::milliseconds(100));
-  //       } });
-
   while (true)
   {
     try
     {
       bool *B = isDev ? &submittingDev : &submitting;
-      if (*B) {
+      if (*B)
+      {
         boost::json::object *S = isDev ? &devShare : &share;
         std::string msg = boost::json::serialize(*S);
 
         // Acquire a lock before writing to the WebSocket
-        ws.async_write(boost::asio::buffer(msg), [&](const boost::system::error_code& ec, std::size_t) {
+        ws.async_write(boost::asio::buffer(msg), [&](const boost::system::error_code &ec, std::size_t)
+                       {
             if (ec) {
                 setcolor(RED);
                 printf("\nasync_write: submission error\n");
                 setcolor(BRIGHT_WHITE);
-            }
-        });
+            } });
         (*B) = false;
       }
 
@@ -660,7 +632,7 @@ void xelis_session(
               if ((*J).contains("lasterror") && (*J).at("lasterror") != "")
               {
                 std::cerr << "received error: " << (*J).at("lasterror") << std::endl
-                          << consoleLine << versionString << " ";
+                          << consoleLine << "v" << versionString << " ";
               }
 
               if (!isDev)
@@ -714,7 +686,6 @@ void xelis_session(
       }
       else
       {
-        printf("read error\n");
         bool *B = isDev ? &devConnected : &isConnected;
         (*B) = false;
         return fail(ec, "async_read");
@@ -1022,7 +993,8 @@ int handleXatumPacket(Xatum::packet xPacket, bool isDev)
     *B = data.at("blob").get<std::string>();
 
     // std::cout << data << std::endl;
-    if (!isDev) {
+    if (!isDev)
+    {
       setcolor(CYAN);
       printf("\nNew Xatum job received\n");
       setcolor(BRIGHT_WHITE);
@@ -1281,6 +1253,11 @@ int main(int argc, char **argv)
   if (vm.count("gpu"))
   {
     gpuMine = true;
+  }
+
+  if (vm.count("broadcast"))
+  {
+    broadcastStats = true;
   }
   // GPU-specific
   if (vm.count("batch-size"))
@@ -1641,6 +1618,9 @@ Mining:
   mutex.unlock();
 
   auto start_time = std::chrono::steady_clock::now();
+  if (broadcastStats) {
+    boost::thread BROADCAST(BroadcastServer::serverThread, &rate30sec, &accepted, &rejected, versionString);
+  }
   // update(start_time);
 
   while (!isConnected)
@@ -2307,9 +2287,7 @@ waitForJob:
         DIFF = devMine ? difficultyDev : difficulty;
         cmpDiff = ConvertDifficultyToBig(DIFF, XELIS_HASH);
 
-        uint64_t *nonce = &i;
-        if (devConnected && devMine)
-          nonce = &i_dev;
+        uint64_t *nonce = devMine ? &i_dev : &i;
         (*nonce)++;
 
         // printf("nonce = %llu\n", *nonce);
@@ -2327,7 +2305,8 @@ waitForJob:
           std::swap(nonceBytes[4], nonceBytes[3]);
         }
 
-        if (localJobCounter != jobCounter || localOurHeight != ourHeight) break;
+        if (localJobCounter != jobCounter || localOurHeight != ourHeight)
+          break;
 
         // std::copy(WORK, WORK + XELIS_TEMPLATE_SIZE, FINALWORK);
         memcpy(FINALWORK, WORK, XELIS_BYTES_ARRAY_INPUT);
@@ -2341,7 +2320,8 @@ waitForJob:
         counter.fetch_add(1);
         submit = (devMine && devConnected) ? !submittingDev : !submitting;
 
-        if (localJobCounter != jobCounter || localOurHeight != ourHeight) break;
+        if (localJobCounter != jobCounter || localOurHeight != ourHeight)
+          break;
 
         if (submit && CheckHash(powHash, cmpDiff, XELIS_HASH))
         {
@@ -2354,6 +2334,11 @@ waitForJob:
           if (devMine)
           {
             mutex.lock();
+            if (localJobCounter != jobCounter || localDevHeight != devHeight)
+            {
+              mutex.unlock();
+              break;
+            }
             setcolor(CYAN);
             std::cout << "\n(DEV) Thread " << tid << " found a dev share\n";
             setcolor(BRIGHT_WHITE);
@@ -2375,6 +2360,11 @@ waitForJob:
           else
           {
             mutex.lock();
+            if (localJobCounter != jobCounter || localOurHeight != ourHeight)
+            {
+              mutex.unlock();
+              break;
+            }
             setcolor(BRIGHT_YELLOW);
             std::cout << "\nThread " << tid << " found a nonce!\n";
             setcolor(BRIGHT_WHITE);
