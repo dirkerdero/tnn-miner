@@ -1,0 +1,45 @@
+name: Build Tnn-miner on Windows Server 2022
+
+on:
+  push:
+    branches:
+    - '*'
+    tags:
+      - "v*.*.*"
+
+jobs:
+  windows-22:
+    runs-on: windows-2022
+    steps:
+    - uses: actions/checkout@v4
+    - name: 'Download and prepare prereqs'
+      continue-on-error: true
+      run: |
+        which 7z
+        where 7z
+        which zstd
+        where zstd
+        ./scripts/prereqs.bat gh
+    - name: 'Compile Tnn-miner'
+      run: |
+        ./scripts/build.bat gh
+        tar -cvf ../tnn-miner-win.tar Tnn-miner
+    - name: 'Archive tnn-miner-win.tar'
+      uses: actions/upload-artifact@v4
+      with:
+        name: tnn-miner-win.tar
+        path: ./tnn-miner-win.tar
+        retention-days: 5
+    - name: 'Dero Test'
+      run: |
+        .\build\Tnn-miner --dero-test
+    - name: 'Xelis Test'
+      run: |
+        .\build\Tnn-miner --xelis-test
+    - name: 'Release'
+      uses: softprops/action-gh-release@v2
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        make_latest: "true"
+        files: |
+          tnn-miner-win.tar
