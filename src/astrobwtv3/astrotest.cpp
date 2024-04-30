@@ -98,10 +98,10 @@ int runDeroVerificationTests(bool useLookup, int dataLen=15) {
       optest_avx2(op, *testWorker, test, *testResult, false);
     }
 
-    auto op_dur = controlResult->duration_ns.count();
+    auto control_dur = controlResult->duration_ns.count();
     auto test_dur = testResult->duration_ns.count();
 
-    auto percent_speedup = double(double(op_dur-test_dur)/double(test_dur))*100;
+    auto percent_speedup = double(double(control_dur-test_dur)/double(test_dur))*100;
     bool valid = 0 == memcmp(controlResult->result, testResult->result, dataLen);
     printf("  Op: %3d - %6ld ns / %6ld ns = %6.2f %% - %s\n", op, controlResult->duration_ns.count(), testResult->duration_ns.count(), percent_speedup, valid ? "true" : "false");
     if(!valid) {
@@ -344,13 +344,16 @@ int TestAstroBWTv3repeattest(bool useLookup)
       if (s != "c392762a462fd991ace791bfe858c338c10c23c555796b50f665b636cb8c8440")
       {
         printf("%d test failed hash %s\n", i, s.c_str());
-        rc = 1;
+        rc += 1;
       }
     }
     else
     {
       byte res[32];
       AstroBWTv3(random_buffer, 48, res, *worker, false);
+    }
+    if(rc >= 5) {
+      return rc;
     }
   }
   std::cout << "Repeated test over" << std::endl;

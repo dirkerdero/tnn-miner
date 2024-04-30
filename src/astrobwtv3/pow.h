@@ -171,7 +171,7 @@ inline __m256i _mm256_mul_epi8(__m256i x, __m256i y) {
 
 inline __m256i _mm256_sllv_epi8(__m256i a, __m256i count) {
     __m256i mask_hi        = _mm256_set1_epi32(0xFF00FF00);
-    __m256i multiplier_lut = _mm256_set_epi8(0,0,0,0, 0,0,0,0, 128,64,32,16, 8,4,2,1, 0,0,0,0, 0,0,0,0, 128,64,32,16, 8,4,2,1);
+    __m256i multiplier_lut = _mm256_set_epi8(0,0,0,0, 0,0,0,0, 0x80,0x40,0x20,0x10, 0x08,0x04,0x02,0x01, 0,0,0,0, 0,0,0,0, 0x80,0x40,0x20,0x10, 0x08,0x04,0x02,0x01);
 
     __m256i count_sat      = _mm256_min_epu8(count, _mm256_set1_epi8(8));     /* AVX shift counts are not masked. So a_i << n_i = 0 for n_i >= 8. count_sat is always less than 9.*/ 
     __m256i multiplier     = _mm256_shuffle_epi8(multiplier_lut, count_sat);  /* Select the right multiplication factor in the lookup table.                                      */
@@ -189,7 +189,7 @@ inline __m256i _mm256_sllv_epi8(__m256i a, __m256i count) {
 
 inline __m256i _mm256_srlv_epi8(__m256i a, __m256i count) {
     __m256i mask_hi        = _mm256_set1_epi32(0xFF00FF00);
-    __m256i multiplier_lut = _mm256_set_epi8(0,0,0,0, 0,0,0,0, 1,2,4,8, 16,32,64,128, 0,0,0,0, 0,0,0,0, 1,2,4,8, 16,32,64,128);
+    __m256i multiplier_lut = _mm256_set_epi8(0,0,0,0, 0,0,0,0, 0x01,0x02,0x04,0x08, 0x10,0x20,0x40,0x80, 0,0,0,0, 0,0,0,0, 0x01,0x02,0x04,0x08, 0x10,0x20,0x40,0x80);
 
     __m256i count_sat      = _mm256_min_epu8(count, _mm256_set1_epi8(8));     /* AVX shift counts are not masked. So a_i >> n_i = 0 for n_i >= 8. count_sat is always less than 9.*/ 
     __m256i multiplier     = _mm256_shuffle_epi8(multiplier_lut, count_sat);  /* Select the right multiplication factor in the lookup table.                                      */
@@ -227,6 +227,7 @@ inline __m256i _mm256_rolv_epi8(__m256i x, __m256i y) {
 
 // Rotates x left by r bits
 inline __m256i _mm256_rol_epi8(__m256i x, int r) {
+  //return _mm256_or_si256(_mm256_slli_epi16(x, r), _mm256_srli_epi16(x, 8 - r));
   // Unpack 2 8 bit numbers into their own vectors, and isolate them using masks
   __m256i mask1 = _mm256_set1_epi16(0x00FF);
   __m256i mask2 = _mm256_set1_epi16(0xFF00);
@@ -433,6 +434,14 @@ inline __m256i genMask(int i) {
   temp = _mm256_insertf128_si256(temp, lower_part, 0); // Set lower 128 bits
   temp = _mm256_insertf128_si256(temp, upper_part, 1); // Set upper 128 bits
   return temp;
+ /*
+  __m256i ones = _mm256_set1_epi32(-1);
+  __m256i cnst32_256 = _mm256_set_epi32(256,224,192,160, 128,96,64,32);
+
+  __m256i shift = _mm256_set1_epi32(i*8);
+  shift = _mm256_subs_epu16(cnst32_256,shift);
+  return _mm256_srlv_epi32(ones,shift);
+  */
 }
 #endif
 
@@ -684,13 +693,9 @@ inline void insertElement(T* arr, int& size, int capacity, int index, const T& e
 
 void processAfterMarker(workerData& worker);
 void lookupCompute(workerData &worker);
-void lookupCompute_SA(workerData &worker);
 void branchComputeCPU(workerData &worker, bool isTest=false);
 
 void branchComputeCPU_avx2(workerData &worker, bool isTest=false);
-void branchComputeCPU_avx(workerData &worker);
-void branchComputeCPU_sse2(workerData &worker);
-void branchComputeCPU_neon(workerData &worker);
 
 void AstroBWTv3(byte *input, int inputLen, byte *outputhash, workerData &scratch, bool lookupMine);
 

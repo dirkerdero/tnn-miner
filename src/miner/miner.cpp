@@ -759,7 +759,6 @@ int main(int argc, char **argv)
 #endif
   setcolor(BRIGHT_WHITE);
   printf("%s", TNN);
-  boost::this_thread::sleep_for(boost::chrono::seconds(1));
 #if defined(_WIN32)
   SetConsoleOutputCP(CP_UTF8);
   HANDLE hSelfToken = NULL;
@@ -908,6 +907,9 @@ int main(int argc, char **argv)
       printf("ERROR: Invalid benchmark arguments. Use -h for assistance\n");
       return 1;
     }
+    mutex.lock();
+    printSupported();
+    mutex.unlock();
     goto Benchmarking;
   }
   if (vm.count("dero-verify")) {
