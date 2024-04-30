@@ -45,7 +45,6 @@
 #include <hex.h>
 #include <pow.h>
 // #include <astrobwtv3_cuda.cuh>
-#include <powtest.h>
 #include "astrotest.hpp"
 #include <thread>
 
