@@ -399,7 +399,6 @@ void runDivsufsortBenchmark() {
 }
 
 
-
 #if defined(__AVX2__)
 
 void computeByteFrequencyAVX2(const unsigned char* data, size_t dataSize, int frequencyTable[256]) {
