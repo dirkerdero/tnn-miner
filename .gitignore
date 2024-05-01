@@ -29,6 +29,18 @@
 /CMakeFiles
 /config
 /.vscode
+/cmake
+/cpp_modules
+/build
+/tests
+/boost-1.82.0/**
+
+# Xelis rust resources
+/src/xelis-hash/**.rs
+/src/xelis-hash/**.toml
+/src/xelis-hash/**.lock
+/src/xelis-hash/target
 
 # Misc
 **.txt
+

@@ -7,15 +7,18 @@
 #include <inttypes.h>
 #include <hex.h>
 #include <endian.hpp>
-#include <gmpxx.h>
 #include <boost/thread.hpp>
 #include <vector>
 #include <terminal.h>
 #include <string>
+#include <num.h>
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
+
+#define DERO_HASH 0
+#define XELIS_HASH 1
 
 const int workerThreads = 2;
 
@@ -25,38 +28,78 @@ const char *nullArg = "NULL";
 std::string host = nullArg;
 std::string port = nullArg;
 std::string wallet = nullArg;
+std::string workerName = "default";
+int miningAlgo = DERO_HASH;
 int threads = 0;
+int testOp = -1;
+int testLen = -1;
+bool gpuMine = false;
+bool useLookupMine = false;
+
+int cudaMemNumerator = 1000;
+int cudaMemDenominator = 750; //Kilobytes per worker in VRAM
 
 // Dev fee config
 // Dev fee is a % of hashrate
+int batchSize = 5000;
 double minFee = 1;
 double devFee = 2.5;
-const char *devPool = "community-pools.mysrv.cloud";
-const char *devPort = "10300";
+const char *devPool = "dero.rabidmining.com";
+
+std::string defaultHost[] = {
+  "dero.rabidmining.com",
+  "127.0.0.1"
+};
+
+std::string devPort[] = {
+  "10300",
+  "8080"
+};
 // @ tritonn on Dero Name Service
-const char *devWallet = "dero1qy5ewgqk8cw8drjhrcr0lpdcm26edqcwdwjke4x67m08nwd2hw4wjqqp6y2n7";
+std::string devWallet[] = {
+  "dero1qy5ewgqk8cw8drjhrcr0lpdcm26edqcwdwjke4x67m08nwd2hw4wjqqp6y2n7",
+  "xel:xz9574c80c4xegnvurazpmxhw5dlg2n0g9qm60uwgt75uqyx3pcsqzzra9m"
+  // "xet:5zwxjesmz6gtpg3c6zt20n9nevsyeewavpx6nwmv08z2hu2dpp3sq8w8ue6"
+};
+
+std::string coinNames[] = {
+  "DERO:",
+  "XELIS:"
+};
 
 const int MINIBLOCK_SIZE = 48;
-mpz_class oneLsh256;                                                   
+const int XELIS_TEMPLATE_SIZE = 112;
 
-void getWork(bool isDev);
+Num oneLsh256;      
+Num maxU256;                                                   
+
+void getWork(bool isDev, int algo);
 void sendWork();
 void devWork();
 
-void mineBlock(int i);
-void benchmark(int i);
-void logSeconds(std::chrono::_V2::system_clock::time_point start_time, int duration, bool *stop);
+void mine(int tid, int algo = DERO_HASH);
+void mineDero(int tid);
+void mineXelis(int tid);
+void cudaMine();
 
-inline mpz_class ConvertDifficultyToBig(int64_t d)
+void benchmark(int i);
+void logSeconds(std::chrono::_V2::steady_clock::time_point start_time, int duration, bool *stop);
+
+inline Num ConvertDifficultyToBig(int64_t d, int algo)
 {
-  // (1 << 256) / (difficultyNum )c
-  mpz_class difficulty = mpz_class(std::to_string(d), 10);
-  mpz_class res = oneLsh256 / difficulty;
-  return res; 
+  Num difficulty = Num(std::to_string(d).c_str(), 10);
+  switch(algo) {
+    case DERO_HASH:
+      return oneLsh256 / difficulty;
+    case XELIS_HASH:
+      return maxU256 / difficulty;
+    default:
+      return 0;
+  }
 }
 
 std::vector<std::string> supportCheck = {
-  "sse","sse2","sse3","avx","avx2","avx512bw"
+  "sse","sse2","sse3","avx","avx2","avx512f"
 };
 
 inline void pSupport(const char *check, bool res)
@@ -71,7 +114,7 @@ inline void printSupported()
   //do nothing
 #else
   setcolor(BRIGHT_WHITE);
-  printf("Supported SIMD Suites\n\n");
+  printf("Supported CPU Intrinsics\n\n");
   setcolor(CYAN);
   pSupport("SSE", __builtin_cpu_supports("sse"));
   pSupport("SSE2", __builtin_cpu_supports("sse2"));
@@ -81,24 +124,42 @@ inline void printSupported()
   pSupport("AVX", __builtin_cpu_supports("avx"));
   pSupport("AVX2", __builtin_cpu_supports("avx2"));
   pSupport("AVX512", __builtin_cpu_supports("avx512f"));
+  bool sha = false;
+  #if defined(__SHA__)
+  sha = true;
+  #endif
+  pSupport("SHA", sha);
   setcolor(BRIGHT_WHITE);
   printf("\n");
 #endif
 }
 
-inline mpz_class ConvertDifficultyToBig(mpz_class d)
+inline Num ConvertDifficultyToBig(Num d, int algo)
 {
-  // (1 << 256) / (difficultyNum )
-  mpz_class res = oneLsh256 / d;
-  return res;
+  switch(algo) {
+    case DERO_HASH:
+      return oneLsh256 / d;
+    case XELIS_HASH:
+      return maxU256 / d;
+    default:
+      return 0;
+  }
 }
 
-inline bool CheckHash(unsigned char *hash, int64_t diff)
+inline bool CheckHash(unsigned char *hash, int64_t diff, int algo)
 {
   if (littleEndian()) std::reverse(hash, hash+32);
-  int cmp = mpz_cmp(mpz_class(hexStr(hash, 32).c_str(), 16).get_mpz_t(), ConvertDifficultyToBig(diff).get_mpz_t());
+  bool cmp = Num(hexStr(hash, 32).c_str(), 16) < ConvertDifficultyToBig(diff, algo);
   if (littleEndian()) std::reverse(hash, hash+32);
-  return (cmp <= 0);
+  return (cmp);
+}
+
+inline bool CheckHash(unsigned char *hash, Num diff, int algo)
+{
+  if (littleEndian()) std::reverse(hash, hash+32);
+  bool cmp = Num(hexStr(hash, 32).c_str(), 16) < diff;
+  if (littleEndian()) std::reverse(hash, hash+32);
+  return (cmp);
 }
 
 void setPriorityClass(boost::thread::native_handle_type t, int priority);
@@ -107,6 +168,6 @@ void setPriority(boost::thread::native_handle_type t, int priority);
 
 void setAffinity(boost::thread::native_handle_type t, int core);
 
-void update(std::chrono::_V2::system_clock::time_point startTime);
+void update(std::chrono::_V2::steady_clock::time_point startTime);
 
 #endif
