@@ -13,13 +13,12 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: 'Download and prepare prereqs'
-      continue-on-error: true
       run: |
         which 7z
         where 7z
         which zstd
         where zstd
-        rmdir /s /q c:\mingw64
+        Remove-Item -Recurse -Force c:\mingw64
         ./scripts/prereqs.bat gh
     - name: 'Compile Tnn-miner'
       run: |
