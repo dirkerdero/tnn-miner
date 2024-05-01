@@ -3465,6 +3465,7 @@ void optest(int op, workerData &worker, bool print=true) {
   }
 }
 
+#if defined(__AVX2__)
 void optest_simd(int op, workerData &worker, bool print=true) {
   if (print){
     printf("SIMD\npre op %d: ", op);
@@ -7064,6 +7065,7 @@ void optest_simd(int op, workerData &worker, bool print=true) {
     printf("\n took %ld ns\n", time.count());
   }
 }
+#endif
 
 void optest_lookup(int op, workerData &worker, bool print=true) {
   if (print){
@@ -7179,12 +7181,14 @@ void runOpTests(int op, int len) {
   // WARMUP, don't print times
   optest(op, *worker);
 
+#if defined(__AVX2__)
   // WARMUP, don't print times
   memcpy(&worker->step_3, test,  16);
   // optest_simd(0, *worker, false);
   optest_simd(op, *worker, false);
   // Primary benchmarking
   optest_simd(op, *worker);
+#endif
 
   // WARMUP, don't print times
   memcpy(&worker->step_3, test,  16);
@@ -7198,8 +7202,10 @@ void runOpTests(int op, int len) {
     memset(&worker2->step_3, 0, 256);
     memcpy(&worker->step_3, test, len+1);
     optest(i, *worker, false);
+ #if defined(__AVX2__)
     memcpy(&worker2->step_3, test, len+1);
     optest_simd(i, *worker2, false);
+ #endif
 
     std::string str1 = hexStr(&(*worker).step_3[0], len);
     std::string str2 = hexStr(&(*worker2).step_3[0], len);
@@ -7472,8 +7478,9 @@ void runDivsufsortBenchmark() {
   std::cout << "Average DC3 time:       " << saislcpAverage << " seconds" << std::endl;
 }
 
-void TestAstroBWTv3()
+int TestAstroBWTv3()
 {
+  int numTestFail = 0;
   std::srand(1);
   int n = -1;
   workerData *worker = (workerData *)malloc_huge_pages(sizeof(workerData));
@@ -7499,7 +7506,12 @@ void TestAstroBWTv3()
     std::string s = hexStr(res, 32);
     if (s.c_str() != t.out)
     {
-      printf("FAIL. Pow function: pow(%s) = %s want %s\n", t.in.c_str(), s.c_str(), t.out.c_str());
+      if(t.expectFail) {
+        printf("SUCCESS! Pow function failed as expected! (%s) -> %s != %s\n", t.in.c_str(), s.c_str(), t.out.c_str());
+      } else {
+        printf("FAIL. Pow function: pow(%s) -> %s != %s\n", t.in.c_str(), s.c_str(), t.out.c_str());
+        numTestFail++;
+      }
 
       // Section below is for debugging modifications to the branched compute operation
 
@@ -7516,7 +7528,7 @@ void TestAstroBWTv3()
     }
     else
     {
-      printf("SUCCESS! pow(%s) = %s want %s\n", t.in.c_str(), s.c_str(), t.out.c_str());
+      printf("SUCCESS! pow(%s) -> %s want %s\n", t.in.c_str(), s.c_str(), t.out.c_str());
     }
 
     delete[] buf;
@@ -7533,7 +7545,7 @@ void TestAstroBWTv3()
 
   printf("A: %s, B: %s\n", hexStr(data, 48).c_str(), hexStr(data2, 48).c_str());
 
-  TestAstroBWTv3repeattest();
+  numTestFail += TestAstroBWTv3repeattest();
 
   // for (int i = 0; i < 1024; i++)
   // {
@@ -7565,10 +7577,12 @@ void TestAstroBWTv3()
   // std::cout << "Repeated test over" << std::endl;
   // libcubwt_free_device_storage(storage);
   // cudaFree(storage);
+  return numTestFail;
 }
 
-void TestAstroBWTv3repeattest()
+int TestAstroBWTv3repeattest()
 {
+  int numTestFail = 0;
   workerData *worker = (workerData *)malloc_huge_pages(sizeof(workerData));
   initWorker(*worker);
   lookupGen(*worker, lookup2D, lookup3D);
@@ -7603,6 +7617,7 @@ void TestAstroBWTv3repeattest()
       if (s != "c392762a462fd991ace791bfe858c338c10c23c555796b50f665b636cb8c8440")
       {
         printf("%d test failed hash %s\n", i, s.c_str());
+        numTestFail=1;
       }
     }
     else
@@ -7612,6 +7627,7 @@ void TestAstroBWTv3repeattest()
     }
   }
   std::cout << "Repeated test over" << std::endl;
+  return numTestFail;
 }
 
 #if defined(__AVX2__)
@@ -7715,7 +7731,11 @@ void AstroBWTv3(byte *input, int inputLen, byte *outputhash, workerData &worker,
     }
     else {
       // start = std::chrono::steady_clock::now();
+ #if defined(__AVX2__)
       branchComputeCPU_avx2(worker);
+ #else
+      lookupCompute(worker);
+ #endif
       // end = std::chrono::steady_clock::now();
     }
     
@@ -7774,7 +7794,7 @@ void AstroBWTv3(byte *input, int inputLen, byte *outputhash, workerData &worker,
   }
 }
 
-
+// Normal
 void branchComputeCPU(workerData &worker)
 {
   while (true)
@@ -10978,6 +10998,7 @@ void branchComputeCPU(workerData &worker)
 
 #if defined(__AVX2__)
 
+// SIMD
 void branchComputeCPU_avx2(workerData &worker)
 {
   while (true)
@@ -14731,7 +14752,7 @@ void branchComputeCPU_avx2(workerData &worker)
 
 // Compute the new values for worker.step_3 using layered lookup tables instead of
 // branched computational operations
-
+// Lookup
 void lookupCompute(workerData &worker)
 {
   while (true)

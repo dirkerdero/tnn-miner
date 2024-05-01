@@ -858,10 +858,20 @@ void xatum_session(
   beast::flat_buffer buffer;
   std::stringstream workInfo;
 
+  Xatum::lastReceivedJobTime = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+
   while (true)
   {
     try
     {
+      if (
+        Xatum::lastReceivedJobTime > 0 &&
+        std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count() 
+        - Xatum::lastReceivedJobTime > Xatum::jobTimeout) {
+        bool *C = isDev ? &devConnected : &isConnected;
+        (*C) = false;
+        return fail(ec, "Xatum session timed out");
+      }
       bool *B = isDev ? &submittingDev : &submitting;
       if (*B)
       {
@@ -874,18 +884,19 @@ void xatum_session(
 
         // printf("submitting share: %s\n", msg.c_str());
         // Acquire a lock before writing to the WebSocket
+        beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(10));
         boost::asio::async_write(stream, boost::asio::buffer(msg), [&](const boost::system::error_code &ec, std::size_t)
                                  {
                       if (ec) {
-                          setcolor(RED);
-                          printf("\nasync_write: submission error\n");
-                          setcolor(BRIGHT_WHITE);
+                          bool *C = isDev ? &devConnected : &isConnected;
+                          (*C) = false;
+                          return fail(ec, "Xatum submission error");
                       } });
         (*B) = false;
       }
       boost::asio::streambuf response;
       std::stringstream workInfo;
-      beast::get_lowest_layer(stream).expires_never();
+      beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(30));
       trans = boost::asio::async_read_until(stream, response, "\n", yield[ec]);
       if (ec && trans > 0)
         return fail(ec, "Xatum async_read_until");
@@ -900,8 +911,6 @@ void xatum_session(
         {
           // printf("pinged\n");
           boost::asio::async_write(stream, boost::asio::buffer(Xatum::pongPacket), yield[ec]);
-          if (ec)
-            return fail(ec, "Xatum pong");
         }
         else
         {
@@ -917,10 +926,9 @@ void xatum_session(
     }
     catch (const std::exception &e)
     {
-      setcolor(RED);
-      std::cout << "ws error: " << e.what() << std::endl;
-      setcolor(BRIGHT_WHITE);
-      // submission_thread.interrupt();
+      bool *C = isDev ? &devConnected : &isConnected;
+      (*C) = false;
+      return fail(ec, "Xatum session error");
     }
     boost::this_thread::sleep_for(boost::chrono::milliseconds(125));
   }
@@ -997,6 +1005,8 @@ int handleXatumPacket(Xatum::packet xPacket, bool isDev)
     if (data.at("blob").get<std::string>().compare(*B) == 0)
       return 0;
     *B = data.at("blob").get<std::string>();
+
+    Xatum::lastReceivedJobTime = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 
     // std::cout << data << std::endl;
     if (!isDev)
@@ -1106,9 +1116,6 @@ void do_session(
 
 int main(int argc, char **argv)
 {
-  SSL_load_error_strings();
-  ERR_load_crypto_strings();
-
 #if defined(_WIN32)
   SetConsoleOutputCP(CP_UTF8);
 #endif
@@ -1306,7 +1313,8 @@ int main(int argc, char **argv)
     goto Benchmarking;
   }
 
-fillBlanks:
+// We aren't testing or benchmarking, so start propmting
+//fillBlanks:
 {
   if (symbol == nullArg)
   {
@@ -1467,11 +1475,12 @@ Testing:
       runOpTests(testOp);
     }
   }
-  TestAstroBWTv3();
+  int numTestFail = TestAstroBWTv3();
   // TestAstroBWTv3_cuda();
   // TestAstroBWTv3repeattest();
-  boost::this_thread::sleep_for(boost::chrono::seconds(3));
-  return 0;
+  boost::this_thread::sleep_for(boost::chrono::seconds(1));
+  std::cout << "Test exiting with exit code: " << numTestFail << std::endl;
+  return numTestFail;
 }
 Benchmarking:
 {
@@ -1629,7 +1638,6 @@ Mining:
   if (broadcastStats) {
     boost::thread BROADCAST(BroadcastServer::serverThread, &rate30sec, &accepted, &rejected, versionString);
   }
-  // update(start_time);
 
   while (!isConnected)
   {
@@ -1821,10 +1829,10 @@ void setPriority(boost::thread::native_handle_type t, int priority)
 
 #else
   // Get the native handle of the thread
-  pthread_t threadHandle = t;
+  //pthread_t threadHandle = t;
 
   // Set the thread priority
-  int threadPriority = priority;
+  //int threadPriority = priority;
   // do nothing
 
 #endif
