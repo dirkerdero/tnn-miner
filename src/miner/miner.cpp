@@ -1314,7 +1314,7 @@ int main(int argc, char **argv)
   }
 
 // We aren't testing or benchmarking, so start propmting
-//fillBlanks:
+fillBlanks:
 {
   if (symbol == nullArg)
   {
