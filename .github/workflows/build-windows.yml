@@ -19,6 +19,7 @@ jobs:
         where 7z
         which zstd
         where zstd
+        rmdir /s /q c:\mingw64
         ./scripts/prereqs.bat gh
     - name: 'Compile Tnn-miner'
       run: |
