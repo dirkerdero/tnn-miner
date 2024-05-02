@@ -1,5 +1,6 @@
 #include <astrotest.hpp>
 
+#if defined(__AVX2__)
 void testPopcnt256_epi8() {
     __m256i data = _mm256_setzero_si256();
     __m256i expected = _mm256_setzero_si256();
@@ -25,6 +26,7 @@ void testPopcnt256_epi8() {
 
     std::cout << "testPopcnt256_epi8 tests passed" << std::endl;
 }
+#endif
 
 
 int DeroTesting(int testOp, int testLen) {

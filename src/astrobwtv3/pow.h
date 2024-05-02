@@ -29,7 +29,9 @@
 // #include <cuda.h>
 // #include <cuda_runtime.h>
 
-#include "immintrin.h"
+#ifdef __X86_64__
+  #include "immintrin.h"
+#endif
 #include "libsais.h"
 
 #ifndef POW_CONST
@@ -694,7 +696,10 @@ inline void insertElement(T* arr, int& size, int capacity, int index, const T& e
 }
 
 void processAfterMarker(workerData& worker);
+
+// Lookup
 void lookupCompute(workerData &worker);
+
 void branchComputeCPU(workerData &worker, bool isTest=false);
 
 void branchComputeCPU_avx2(workerData &worker, bool isTest=false);

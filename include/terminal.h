@@ -3,13 +3,15 @@
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <boost/program_options.hpp>
+
 #if defined(__linux__)
   #include <sys/ioctl.h>
 #endif
 
 namespace po = boost::program_options;  // from <boost/program_options.hpp>
 
-const char *versionString = "v0.3.1";
+const char *versionString = "0.3.1";
 const char *consoleLine = " TNN-MINER ";
 const char *TNN = R"(
   
@@ -127,12 +129,12 @@ inline po::options_description get_prog_opts()
     ("help", "produce help message")
     ("dero", "Will mine Dero")
     ("xelis", "Will mine Xelis")
+    ("broadcast", "Creates an http server to query miner stats")
     ("testnet", "Adjusts in-house parameters to mine on testnets")
     ("daemon-address", po::value<std::string>(), "Node/pool URL or IP address to mine to") // todo: parse out port and/or wss:// or ws://
     ("port", po::value<int>(), "The port used to connect to the node")
     ("wallet", po::value<std::string>(), "Wallet address for receiving mining rewards")
     ("threads", po::value<int>(), "The amount of mining threads to create, default is 1")
-    ("worker-name", po::value<std::string>(), "Sets the worker name for this instance when mining Xelis")
     ("dev-fee", po::value<double>(), "Your desired dev fee percentage, default is 2.5, minimum is 1")
     ("no-lock", "Disables CPU affinity / CPU core binding")
     // ("gpu", "Mine with GPU instead of CPU")
@@ -159,6 +161,7 @@ inline po::options_description get_prog_opts()
     ("xatum", "Required for mining to Xatum pools on Xelis")
     ("xelis-bench", "Run a benchmark of xelis-hash with 1 thread")
     ("xelis-test", "Run the xelis-hash tests from the official source code")
+    ("worker-name", po::value<std::string>(), "Sets the worker name for this instance when mining Xelis")
   ;
 
   dero.add(debug);

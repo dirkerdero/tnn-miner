@@ -65,6 +65,7 @@
 #include <base64.hpp>
 
 #include <bit>
+#include <broadcastServer.hpp>
 
 #if defined(_WIN32)
 #include <Windows.h>
@@ -580,53 +581,24 @@ void xelis_session(
 
   bool subStart = false;
 
-  // boost::thread submission_thread([&]
-  //                                 {
-  //         bool *C = isDev ? &isConnected : &devConnected;
-  //         bool *B = isDev ? &submittingDev : &submitting;
-
-  //         bool keepLoop = true;
-
-  //         while (true) {
-  //           try {
-  //             if (!(*C)) break;
-  //             if (*B) {
-  //               boost::json::object *S = isDev ? &devShare : &share;
-  //               std::string msg = boost::json::serialize(*S);
-
-  //               // Acquire a lock before writing to the WebSocket
-  //               ws.async_write(boost::asio::buffer(msg), [&](const boost::system::error_code& ec, std::size_t) {
-  //                   if (ec) {
-  //                       setcolor(RED);
-  //                       printf("\nasync_write: submission error\n");
-  //                       setcolor(BRIGHT_WHITE);
-  //                   }
-  //               });
-  //               if (keepLoop == false) break;
-  //               (*B) = false;
-  //             }
-  //           } catch(...){}
-
-  //           boost::this_thread::sleep_for(boost::chrono::milliseconds(100));
-  //       } });
-
   while (true)
   {
     try
     {
       bool *B = isDev ? &submittingDev : &submitting;
-      if (*B) {
+      if (*B)
+      {
         boost::json::object *S = isDev ? &devShare : &share;
         std::string msg = boost::json::serialize(*S);
 
         // Acquire a lock before writing to the WebSocket
-        ws.async_write(boost::asio::buffer(msg), [&](const boost::system::error_code& ec, std::size_t) {
+        ws.async_write(boost::asio::buffer(msg), [&](const boost::system::error_code &ec, std::size_t)
+                       {
             if (ec) {
                 setcolor(RED);
                 printf("\nasync_write: submission error\n");
                 setcolor(BRIGHT_WHITE);
-            }
-        });
+            } });
         (*B) = false;
       }
 
@@ -660,7 +632,7 @@ void xelis_session(
               if ((*J).contains("lasterror") && (*J).at("lasterror") != "")
               {
                 std::cerr << "received error: " << (*J).at("lasterror") << std::endl
-                          << consoleLine << versionString << " ";
+                          << consoleLine << "v" << versionString << " ";
               }
 
               if (!isDev)
@@ -714,7 +686,6 @@ void xelis_session(
       }
       else
       {
-        printf("read error\n");
         bool *B = isDev ? &devConnected : &isConnected;
         (*B) = false;
         return fail(ec, "async_read");
@@ -887,10 +858,20 @@ void xatum_session(
   beast::flat_buffer buffer;
   std::stringstream workInfo;
 
+  Xatum::lastReceivedJobTime = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+
   while (true)
   {
     try
     {
+      if (
+        Xatum::lastReceivedJobTime > 0 &&
+        std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count() 
+        - Xatum::lastReceivedJobTime > Xatum::jobTimeout) {
+        bool *C = isDev ? &devConnected : &isConnected;
+        (*C) = false;
+        return fail(ec, "Xatum session timed out");
+      }
       bool *B = isDev ? &submittingDev : &submitting;
       if (*B)
       {
@@ -903,18 +884,19 @@ void xatum_session(
 
         // printf("submitting share: %s\n", msg.c_str());
         // Acquire a lock before writing to the WebSocket
+        beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(10));
         boost::asio::async_write(stream, boost::asio::buffer(msg), [&](const boost::system::error_code &ec, std::size_t)
                                  {
                       if (ec) {
-                          setcolor(RED);
-                          printf("\nasync_write: submission error\n");
-                          setcolor(BRIGHT_WHITE);
+                          bool *C = isDev ? &devConnected : &isConnected;
+                          (*C) = false;
+                          return fail(ec, "Xatum submission error");
                       } });
         (*B) = false;
       }
       boost::asio::streambuf response;
       std::stringstream workInfo;
-      beast::get_lowest_layer(stream).expires_never();
+      beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(30));
       trans = boost::asio::async_read_until(stream, response, "\n", yield[ec]);
       if (ec && trans > 0)
         return fail(ec, "Xatum async_read_until");
@@ -929,8 +911,6 @@ void xatum_session(
         {
           // printf("pinged\n");
           boost::asio::async_write(stream, boost::asio::buffer(Xatum::pongPacket), yield[ec]);
-          if (ec)
-            return fail(ec, "Xatum pong");
         }
         else
         {
@@ -946,10 +926,9 @@ void xatum_session(
     }
     catch (const std::exception &e)
     {
-      setcolor(RED);
-      std::cout << "ws error: " << e.what() << std::endl;
-      setcolor(BRIGHT_WHITE);
-      // submission_thread.interrupt();
+      bool *C = isDev ? &devConnected : &isConnected;
+      (*C) = false;
+      return fail(ec, "Xatum session error");
     }
     boost::this_thread::sleep_for(boost::chrono::milliseconds(125));
   }
@@ -967,6 +946,12 @@ int handleXatumPacket(Xatum::packet xPacket, bool isDev)
   if (command == Xatum::print)
   {
     mutex.lock();
+    if (Xatum::accepted.compare(data.at("msg").get<std::string>()) == 0)
+      accepted++;
+
+    if (Xatum::stale.compare(data.at("msg").get<std::string>()) == 0)
+      rejected++;
+    
     int msgLevel = data.at("lvl").get<int>();
     if (msgLevel < Xatum::logLevel)
       return 0;
@@ -1021,14 +1006,21 @@ int handleXatumPacket(Xatum::packet xPacket, bool isDev)
       return 0;
     *B = data.at("blob").get<std::string>();
 
+    Xatum::lastReceivedJobTime = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+
     // std::cout << data << std::endl;
-    if (!isDev) {
+    if (!isDev)
+    {
       setcolor(CYAN);
       printf("\nNew Xatum job received\n");
       setcolor(BRIGHT_WHITE);
     }
     *diff = data.at("diff").get<uint64_t>();
-    (*J).emplace("template", (*B).c_str());
+
+    if ((*J).contains("template"))
+      (*J).at("template") = (*B).c_str();
+    else
+      (*J).emplace("template", (*B).c_str());
 
     bool *C = isDev ? &devConnected : &isConnected;
 
@@ -1124,9 +1116,6 @@ void do_session(
 
 int main(int argc, char **argv)
 {
-  SSL_load_error_strings();
-  ERR_load_crypto_strings();
-
 #if defined(_WIN32)
   SetConsoleOutputCP(CP_UTF8);
 #endif
@@ -1281,6 +1270,11 @@ int main(int argc, char **argv)
   {
     gpuMine = true;
   }
+
+  if (vm.count("broadcast"))
+  {
+    broadcastStats = true;
+  }
   // GPU-specific
   if (vm.count("batch-size"))
   {
@@ -1332,6 +1326,7 @@ int main(int argc, char **argv)
     return rc;
   }
 
+// We aren't testing or benchmarking, so start propmting
 fillBlanks:
 {
   if (symbol == nullArg)
@@ -1631,7 +1626,9 @@ Mining:
   mutex.unlock();
 
   auto start_time = std::chrono::steady_clock::now();
-  // update(start_time);
+  if (broadcastStats) {
+    boost::thread BROADCAST(BroadcastServer::serverThread, &rate30sec, &accepted, &rejected, versionString);
+  }
 
   while (!isConnected)
   {
@@ -1823,10 +1820,10 @@ void setPriority(boost::thread::native_handle_type t, int priority)
 
 #else
   // Get the native handle of the thread
-  pthread_t threadHandle = t;
+  //pthread_t threadHandle = t;
 
   // Set the thread priority
-  int threadPriority = priority;
+  //int threadPriority = priority;
   // do nothing
 
 #endif
@@ -2297,9 +2294,7 @@ waitForJob:
         DIFF = devMine ? difficultyDev : difficulty;
         cmpDiff = ConvertDifficultyToBig(DIFF, XELIS_HASH);
 
-        uint64_t *nonce = &i;
-        if (devConnected && devMine)
-          nonce = &i_dev;
+        uint64_t *nonce = devMine ? &i_dev : &i;
         (*nonce)++;
 
         // printf("nonce = %llu\n", *nonce);
@@ -2317,7 +2312,8 @@ waitForJob:
           std::swap(nonceBytes[4], nonceBytes[3]);
         }
 
-        if (localJobCounter != jobCounter || localOurHeight != ourHeight) break;
+        if (localJobCounter != jobCounter || localOurHeight != ourHeight)
+          break;
 
         // std::copy(WORK, WORK + XELIS_TEMPLATE_SIZE, FINALWORK);
         memcpy(FINALWORK, WORK, XELIS_BYTES_ARRAY_INPUT);
@@ -2331,7 +2327,8 @@ waitForJob:
         counter.fetch_add(1);
         submit = (devMine && devConnected) ? !submittingDev : !submitting;
 
-        if (localJobCounter != jobCounter || localOurHeight != ourHeight) break;
+        if (localJobCounter != jobCounter || localOurHeight != ourHeight)
+          break;
 
         if (submit && CheckHash(powHash, cmpDiff, XELIS_HASH))
         {
@@ -2344,6 +2341,11 @@ waitForJob:
           if (devMine)
           {
             mutex.lock();
+            if (localJobCounter != jobCounter || localDevHeight != devHeight)
+            {
+              mutex.unlock();
+              break;
+            }
             setcolor(CYAN);
             std::cout << "\n(DEV) Thread " << tid << " found a dev share\n";
             setcolor(BRIGHT_WHITE);
@@ -2365,6 +2367,11 @@ waitForJob:
           else
           {
             mutex.lock();
+            if (localJobCounter != jobCounter || localOurHeight != ourHeight)
+            {
+              mutex.unlock();
+              break;
+            }
             setcolor(BRIGHT_YELLOW);
             std::cout << "\nThread " << tid << " found a nonce!\n";
             setcolor(BRIGHT_WHITE);

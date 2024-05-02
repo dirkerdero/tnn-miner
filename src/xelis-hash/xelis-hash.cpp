@@ -2,23 +2,29 @@
 #include <stdlib.h>
 #include <iostream>
 
-#include <emmintrin.h>
-#include <immintrin.h>
+#ifdef __X86_64__
+  #include <emmintrin.h>
+  #include <immintrin.h>
+#endif
+
 #include <numeric>
 #include <chrono>
 #include <cstring>
 #include <array>
 #include <cassert>
 
-#ifdef __WIN32__
+#ifdef _WIN32
 #include <winsock2.h>
 #else
 #include <arpa/inet.h>
-#define _rotl64(x, a) (((x << a%64) | (x >> (64 - a%64))))
 #endif
+
+#define rl64(x, a) (((x << a%64) | (x >> (64 - a%64))))
 
 #define htonll(x) ((1==htonl(1)) ? (x) : ((uint64_t)htonl((x) & 0xFFFFFFFF) << 32) | htonl((x) >> 32))
 #define ntohll(x) ((1==ntohl(1)) ? (x) : ((uint64_t)ntohl((x) & 0xFFFFFFFF) << 32) | ntohl((x) >> 32))
+
+#ifdef __X86_64__
 
 alignas(32) const int sign_bit_values[8][8] = {
     {0, 0, 0, 0, 0, 0, 0, -1},
@@ -91,7 +97,7 @@ void keccakp_1600_12(uint64_t state[25]) {
             C[i] = state[i] ^ state[i + 5] ^ state[i + 10] ^ state[i + 15] ^ state[i + 20];
         }
         for (int i = 0; i < 5; ++i) {
-            D[i] = C[(i + 4) % 5] ^ _rotl64(C[(i + 1) % 5], 1);
+            D[i] = C[(i + 4) % 5] ^ rl64(C[(i + 1) % 5], 1);
         }
         for (int i = 0; i < 25; ++i) {
             state[i] ^= D[i % 5];
@@ -102,7 +108,7 @@ void keccakp_1600_12(uint64_t state[25]) {
         for (int i = 0; i < 24; ++i) {
             uint32_t j = PI[i];
             uint64_t temp = state[j];
-            state[j] = _rotl64(last, RHO[i]);
+            state[j] = rl64(last, RHO[i]);
             last = temp;
         }
 
@@ -133,11 +139,11 @@ void keccakp_1600_12_unrolled(uint64_t state[25]) {
         C[3] = state[3] ^ state[8] ^ state[13] ^ state[18] ^ state[23];
         C[4] = state[4] ^ state[9] ^ state[14] ^ state[19] ^ state[24];
 
-        D[0] = C[4] ^ _rotl64(C[1], 1);
-        D[1] = C[0] ^ _rotl64(C[2], 1);
-        D[2] = C[1] ^ _rotl64(C[3], 1);
-        D[3] = C[2] ^ _rotl64(C[4], 1);
-        D[4] = C[3] ^ _rotl64(C[0], 1);
+        D[0] = C[4] ^ rl64(C[1], 1);
+        D[1] = C[0] ^ rl64(C[2], 1);
+        D[2] = C[1] ^ rl64(C[3], 1);
+        D[3] = C[2] ^ rl64(C[4], 1);
+        D[4] = C[3] ^ rl64(C[0], 1);
 
         state[0] ^= D[0];
         state[5] ^= D[0];
@@ -171,30 +177,30 @@ void keccakp_1600_12_unrolled(uint64_t state[25]) {
 
         // Rho and Pi steps
         uint64_t last = state[1];
-        state[1] = _rotl64(state[6], 44);
-        state[6] = _rotl64(state[9], 20);
-        state[9] = _rotl64(state[22], 61);
-        state[22] = _rotl64(state[14], 39);
-        state[14] = _rotl64(state[20], 18);
-        state[20] = _rotl64(state[2], 62);
-        state[2] = _rotl64(state[12], 43);
-        state[12] = _rotl64(state[13], 25);
-        state[13] = _rotl64(state[19], 8);
-        state[19] = _rotl64(state[23], 56);
-        state[23] = _rotl64(state[15], 41);
-        state[15] = _rotl64(state[4], 27);
-        state[4] = _rotl64(state[24], 14);
-        state[24] = _rotl64(state[21], 2);
-        state[21] = _rotl64(state[8], 55);
-        state[8] = _rotl64(state[16], 45);
-        state[16] = _rotl64(state[5], 36);
-        state[5] = _rotl64(state[3], 28);
-        state[3] = _rotl64(state[18], 21);
-        state[18] = _rotl64(state[17], 15);
-        state[17] = _rotl64(state[11], 10);
-        state[11] = _rotl64(state[7], 6);
-        state[7] = _rotl64(state[10], 3);
-        state[10] = _rotl64(last, 1);
+        state[1] = rl64(state[6], 44);
+        state[6] = rl64(state[9], 20);
+        state[9] = rl64(state[22], 61);
+        state[22] = rl64(state[14], 39);
+        state[14] = rl64(state[20], 18);
+        state[20] = rl64(state[2], 62);
+        state[2] = rl64(state[12], 43);
+        state[12] = rl64(state[13], 25);
+        state[13] = rl64(state[19], 8);
+        state[19] = rl64(state[23], 56);
+        state[23] = rl64(state[15], 41);
+        state[15] = rl64(state[4], 27);
+        state[4] = rl64(state[24], 14);
+        state[24] = rl64(state[21], 2);
+        state[21] = rl64(state[8], 55);
+        state[8] = rl64(state[16], 45);
+        state[16] = rl64(state[5], 36);
+        state[5] = rl64(state[3], 28);
+        state[3] = rl64(state[18], 21);
+        state[18] = rl64(state[17], 15);
+        state[17] = rl64(state[11], 10);
+        state[11] = rl64(state[7], 6);
+        state[7] = rl64(state[10], 3);
+        state[10] = rl64(last, 1);
 
         // Chi step
         for (int j = 0; j < 25; j += 5) {
@@ -405,10 +411,10 @@ void stage_3(uint64_t* scratchPad, byte* hashResult) {
           uint64_t v;
           switch ((result >> (j * 2)) & 0xf) {
             case 0:
-              v = _rotl64(result, j) ^ b;
+              v = rl64(result, j) ^ b;
               break;
             case 1:
-              v = ~(_rotl64(result, j) ^ a);
+              v = ~(rl64(result, j) ^ a);
               break;
             case 2:
               v = ~(result ^ a);
@@ -652,3 +658,17 @@ void xelis_runTests() {
       std::cout << "XELIS-HASH: Some tests failed!" << std::endl;
   }
 }
+
+#else
+
+
+void xelis_hash(byte* input, workerData_xelis &worker, byte *hashResult) {
+}
+
+void xelis_benchmark_cpu_hash() {
+}
+
+void xelis_runTests() {
+}
+
+#endif

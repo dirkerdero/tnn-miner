@@ -1,8 +1,22 @@
 cmake_minimum_required(VERSION 3.16.3)
 
+include(CMakePrintHelpers)
+
+project(
+  Tnn-miner
+  VERSION 0.3.1
+  DESCRIPTION "Open Source Astrobwt Miner"
+)
+
+
+set(MARCH "native")
+
+cmake_print_variables(CMAKE_SYSTEM_PROCESSOR)
+#if(CMAKE_HOST_SYSTEM_PROCESSOR)
+
 set(CMAKE_BUILD_TYPE Release)
-set(CMAKE_C_FLAGS_RELEASE   "${CMAKE_C_FLAGS_RELEASE}   -static -O3 -g -fPIE -ftree-vectorize -DNDEBUG")
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -static -O3 -g -pthread -m64 -Wuninitialized -march=native -DNDEBUG")
+#set(CMAKE_C_FLAGS_RELEASE   "${CMAKE_C_FLAGS_RELEASE}   -static -O3 -g -fPIE -ftree-vectorize -DNDEBUG")
+#set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -static -O3 -g -pthread -m64 -Wuninitialized -march=native -DNDEBUG")
 
 if(USE_GCC)
   set(CMAKE_C_COMPILER gcc)
@@ -11,8 +25,8 @@ if(USE_GCC)
   set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -Wno-deprecated-declarations")
   set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -Wno-deprecated-declarations")
 else()
-  set(CMAKE_C_COMPILER clang)
-  set(CMAKE_CXX_COMPILER clang++)
+	#set(CMAKE_C_COMPILER clang)
+	#set(CMAKE_CXX_COMPILER clang++)
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fuse-ld=lld")
   set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -Wno-deprecated")
   set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -Wno-deprecated")
@@ -24,6 +38,13 @@ project(
   DESCRIPTION "Open Source Astrobwt Miner"
 )
 
+cmake_print_variables(CMAKE_SYSTEM_PROCESSOR)
+
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
+  set(MARCH "armv8.2-a")
+endif()
+set(CMAKE_C_FLAGS_RELEASE   "${CMAKE_C_FLAGS_RELEASE}   -static -O3 -g -fPIE -ftree-vectorize -DNDEBUG")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -static -O3 -g -pthread -Wuninitialized -march=${MARCH} -DNDEBUG")
 # if(WIN32)
 # set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
 # endif()
@@ -36,11 +57,11 @@ project(
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fstack-protector")
 
 set (CMAKE_STANDARD_REQUIRED TRUE)
-set (CMAKE_CXX_STANDARD 23)
-
-
+set (CMAKE_CXX_STANDARD 20)
 
 enable_language(ASM)
+
+include(CMakePrintHelpers)
 
 if(WIN32)
   include_directories(
@@ -53,9 +74,19 @@ if(WIN32)
   )
 endif()
 
-include_directories(${CUDAToolkit_INCLUDE_DIRS})
+# download CPM.cmake
+file(
+  DOWNLOAD
+  https://github.com/cpm-cmake/CPM.cmake/releases/download/v0.38.3/CPM.cmake
+  ${CMAKE_CURRENT_BINARY_DIR}/cmake/CPM.cmake
+  EXPECTED_HASH SHA256=cc155ce02e7945e7b8967ddfaff0b050e958a723ef7aad3766d368940cb15494
+)
+include(${CMAKE_CURRENT_BINARY_DIR}/cmake/CPM.cmake)
 
-set(CPM_DOWNLOAD_VERSION 0.34.0)
+# This stores downloaded dependencies so we do not need to re-download them
+set(CPM_SOURCE_CACHE "${PROJECT_SOURCE_DIR}/.cache/CPM")
+
+set(CPM_DOWNLOAD_VERSION 0.39.0)
 
 if(CPM_SOURCE_CACHE)
   set(CPM_DOWNLOAD_LOCATION "${CPM_SOURCE_CACHE}/cpm/CPM_${CPM_DOWNLOAD_VERSION}.cmake")
@@ -86,20 +117,13 @@ execute_process(COMMAND ${LSB_RELEASE_EXEC} -cs
     OUTPUT_STRIP_TRAILING_WHITESPACE
 )
 
-if("${LSB_RELEASE_CODENAME_SHORT}" STREQUAL "jammy")
-  set(Boost_NO_SYSTEM_PATHS TRUE)
-  if (Boost_NO_SYSTEM_PATHS)
-    set(Boost_NO_BOOST_CMAKE TRUE)
-    set(BOOST_ROOT "${PROJECT_SOURCE_DIR}/boost-1.82.0")
-    set(BOOST_INCLUDE_DIRS "${BOOST_ROOT}")
-    set(BOOST_LIBRARY_DIRS "${BOOST_ROOT}/libs")
-  endif (Boost_NO_SYSTEM_PATHS)
-endif()
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
 
 set(Boost_USE_STATIC_LIBS ON)
 set(Boost_USE_MULTITHREADED ON)
 set(Boost_NO_WARN_NEW_VERSIONS ON)
-find_package(Boost 1.80 REQUIRED
+find_package(Boost 1.80 COMPONENTS
   chrono
   context
   json
@@ -108,10 +132,42 @@ find_package(Boost 1.80 REQUIRED
   program_options
 )
 
-set(THREADS_PREFER_PTHREAD_FLAG ON)
-find_package(Threads REQUIRED)
+if(Boost_FOUND)
+  message("OS-provided Boost found")
+  set(TNN_BOOST_INCLUDES ${Boost_INCLUDE_DIRS})
+else()
+  message("Boost not found. Using CPM to add it")
+  CPMAddPackage(
+    NAME Boost
+    VERSION 1.85.0
+    URL https://github.com/boostorg/boost/releases/download/boost-1.85.0/boost-1.85.0-cmake.tar.xz
+    URL_HASH SHA256=0a9cc56ceae46986f5f4d43fe0311d90cf6d2fa9028258a95cab49ffdacf92ad
+    OPTIONS "Boost_ENABLE_CMAKE ON" "BOOST_INCLUDE_LIBRARIES chrono\\\;context\\\;json\\\;thread\\\;atomic\\\;program_options" # Note the escapes!
+      # Maintain build compatibility between find_package and CMakeLists.txt variants
+  )
 
-set(BOOST_INCLUDE_DIRS ${Boost_INCLUDE_DIRS})
+  if(Boost_ADDED)
+    file(GLOB files "${Boost_SOURCE_DIR}/libs/*/include")
+    foreach(filename ${files})
+      include_directories(${filename})
+    endforeach()
+
+    file(GLOB files "${Boost_SOURCE_DIR}/libs/*/*/include")
+    foreach(filename ${files})
+      include_directories(${filename})
+    endforeach()
+  else()
+    message(FATAL_ERROR "Boost was neither found nor added.")
+  endif()
+
+  set(TNN_BOOST_INCLUDES ${Boost_SOURCE_DIR})
+endif()
+
+# This is universal regardless of how wheter we compiled or found Boost
+set(TNN_BOOST_LIBS Boost::chrono Boost::context Boost::json Boost::thread Boost::atomic Boost::program_options)
+
+#cmake_print_variables(TNN_BOOST_INCLUDES)
+#cmake_print_variables(TNN_BOOST_LIBS)
 
 include_directories(
   ${PROJECT_SOURCE_DIR}/include
@@ -122,11 +178,8 @@ include_directories(
   "${PROJECT_SOURCE_DIR}/src/xelis-hash/"
   "${PROJECT_SOURCE_DIR}/src/xatum/"
   "${PROJECT_SOURCE_DIR}/src/miner/"
-  "${BOOST_INCLUDE_DIRS}"
-)
-
-set(ASM_SOURCES 
-  "${PROJECT_SOURCE_DIR}/src/xelis-hash/*.s"
+  "${TNN_BOOST_INCLUDES}"
+  "${PROJECT_SOURCE_DIR}/src/broadcast/"
 )
 
 file(GLOB all_SRCS
@@ -139,14 +192,13 @@ file(GLOB all_SRCS
   "${PROJECT_SOURCE_DIR}/src/astrobwtv3/*.c"
   "${PROJECT_SOURCE_DIR}/src/xelis-hash/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/xelis-hash/*.c"
-  "${ASM_SOURCES}"
+  "${PROJECT_SOURCE_DIR}/src/broadcast/*.cpp"
   # "${PROJECT_SOURCE_DIR}/src/astrobwtv3/*.cu"
   # "${PROJECT_SOURCE_DIR}/src/astrobwtv3/*.cuh"
   "${PROJECT_SOURCE_DIR}/src/miner/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/miner/*.c"
 )
 
-add_definitions(${GTK3_CFLAGS_OTHER})
 add_executable(${PROJECT_NAME} ${all_SRCS})
 
 if(WIN32)
@@ -155,5 +207,4 @@ endif()
 if(UNIX)
   target_link_libraries(${PROJECT_NAME} udns pthread)
 endif()
-target_link_libraries(${PROJECT_NAME} Threads::Threads nlohmann_json::nlohmann_json ${Boost_LIBRARIES} OpenSSL::SSL OpenSSL::Crypto)
-
+target_link_libraries(${PROJECT_NAME} Threads::Threads nlohmann_json::nlohmann_json ${TNN_BOOST_LIBS} OpenSSL::SSL OpenSSL::Crypto)
