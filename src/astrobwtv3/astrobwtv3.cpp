@@ -7307,3 +7307,321 @@ void buildSuffixArray(const uint8_t* data, int n, int* suffixArray, int* buckets
     delete[] temp;
 }
 
+// Compute the new values for worker.step_3 using layered lookup tables instead of
+// branched computational operations
+// Lookup
+void lookupCompute(workerData &worker)
+{
+  while (true)
+  {
+    worker.tries++;
+    worker.random_switcher = worker.prev_lhash ^ worker.lhash ^ worker.tries;
+    // printf("%d worker.random_switcher %d %08jx\n", worker.tries, worker.random_switcher, worker.random_switcher);
+
+    worker.op = static_cast<byte>(worker.random_switcher);
+    if (debugOpOrder) worker.opsB.push_back(worker.op);
+
+    // printf("op: %d\n", worker.op);
+
+    worker.pos1 = static_cast<byte>(worker.random_switcher >> 8);
+    worker.pos2 = static_cast<byte>(worker.random_switcher >> 16);
+
+    // __builtin_prefetch(worker.step_3 + worker.pos1, 0, 1);
+    // __builtin_prefetch(worker.maskTable, 0, 0);
+
+    if (worker.pos1 > worker.pos2)
+    {
+      std::swap(worker.pos1, worker.pos2);
+    }
+
+    if (worker.pos2 - worker.pos1 > 32)
+    {
+      worker.pos2 = worker.pos1 + ((worker.pos2 - worker.pos1) & 0x1f);
+    }
+
+    // int otherpos = std::find(branchedOps.begin(), branchedOps.end(), worker.op) == branchedOps.end() ? 0 : worker.step_3[worker.pos2];
+    // __builtin_prefetch(&worker.step_3[worker.pos1], 0, 0);
+    // __builtin_prefetch(&worker.lookup[lookupIndex(worker.op,0,otherpos)]);
+    worker.chunk = &worker.sData[(worker.tries - 1) * 256];
+    if (worker.tries == 1) {
+      worker.prev_chunk = worker.chunk;
+    } else {
+      worker.prev_chunk = &worker.sData[(worker.tries - 2) * 256];
+
+      // Calculate the start and end blocks
+      int start_block = 0;
+      int end_block = worker.pos1 / 16;
+
+      // Copy the blocks before worker.pos1
+      for (int i = start_block; i < end_block; i++) {
+#if defined(__AVX2__)
+          __m128i prev_data = _mm_loadu_si128((__m128i*)&worker.prev_chunk[i * 16]);
+          _mm_storeu_si128((__m128i*)&worker.chunk[i * 16], prev_data);
+#else
+	  worker.chunk[i] = worker.prev_chunk[i];
+#endif
+      }
+
+      // Copy the remaining bytes before worker.pos1
+      for (int i = end_block * 16; i < worker.pos1; i++) {
+          worker.chunk[i] = worker.prev_chunk[i];
+      }
+
+      // Calculate the start and end blocks
+      start_block = (worker.pos2 + 15) / 16;
+      end_block = 16;
+
+      // Copy the blocks after worker.pos2
+      for (int i = start_block; i < end_block; i++) {
+#if defined(__AVX2__)
+          __m128i prev_data = _mm_loadu_si128((__m128i*)&worker.prev_chunk[i * 16]);
+          _mm_storeu_si128((__m128i*)&worker.chunk[i * 16], prev_data);
+#else
+	  worker.chunk[i] = worker.prev_chunk[i];
+#endif
+      }
+
+      // Copy the remaining bytes after worker.pos2
+      for (int i = worker.pos2; i < start_block * 16; i++) {
+        worker.chunk[i] = worker.prev_chunk[i];
+      }
+    }
+
+    if (debugOpOrder && worker.op == sus_op) {
+      printf("Lookup pre op %d, pos1: %d, pos2: %d::\n", worker.op, worker.pos1, worker.pos2);
+      for (int i = 0; i < 256; i++) {
+          printf("%02X ", worker.prev_chunk[i]);
+      }
+      printf("\n");
+    }
+    // fmt::printf("op: %d, ", worker.op);
+    // fmt::printf("worker.pos1: %d, worker.pos2: %d\n", worker.pos1, worker.pos2);
+
+    // printf("index: %d\n", lookupIndex(op, worker.step_3[worker.pos1], worker.step_3[worker.pos2]));
+
+    if (worker.op == 253) {
+#pragma GCC unroll 32
+      for (int i = worker.pos1; i < worker.pos2; i++)
+      {
+        worker.chunk[i] = worker.prev_chunk[i];
+      }
+      for (int i = worker.pos1; i < worker.pos2; i++)
+      {
+
+        // INSERT_RANDOM_CODE_START
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);  // rotate  bits by 3
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
+        worker.chunk[i] ^= worker.chunk[worker.pos2];     // XOR
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);  // rotate  bits by 3
+        // INSERT_RANDOM_CODE_END
+
+        worker.prev_lhash = worker.lhash + worker.prev_lhash;
+        worker.lhash = XXHash64::hash(worker.chunk, worker.pos2,0);
+      }
+      goto after;
+    }
+    if (worker.op >= 254) {
+      RC4_set_key(&worker.key, 256,  worker.prev_chunk);
+    }
+    {
+      bool use2D = std::find(worker.branchedOps, worker.branchedOps + branchedOps_size, worker.op) == worker.branchedOps + branchedOps_size;
+      uint16_t *lookup2D = use2D ? &worker.lookup2D[0] : nullptr;
+      byte *lookup3D = use2D ? nullptr : &worker.lookup3D[0];
+
+      int firstIndex;
+      __builtin_prefetch(&worker.prev_chunk[worker.pos1],0,3);
+      __builtin_prefetch(&worker.prev_chunk[worker.pos1]+192,0,3);
+
+      if (use2D) {
+        firstIndex = worker.reg_idx[worker.op]*(256*256);
+        int n = 0;
+
+        // Manually unrolled loops for repetetive efficiency. Worst possible loop count for 2D
+        // lookups is now 4, with less than 4 being pretty common.
+
+        //TODO: ask AI if assignment would be faster below
+
+        // Groups of 8
+        for (int i = worker.pos1; i < worker.pos2-7; i += 8) {
+          __builtin_prefetch(&lookup2D[firstIndex + 256*n++],0,3);
+          uint32_t val1 = (lookup2D[(firstIndex + (worker.prev_chunk[i+1] << 8)) | worker.prev_chunk[i]]) |
+            (lookup2D[(firstIndex + (worker.prev_chunk[i+3] << 8)) | worker.prev_chunk[i+2]] << 16);
+          uint32_t val2 =(lookup2D[(firstIndex + (worker.prev_chunk[i+5] << 8)) | worker.prev_chunk[i+4]]) |
+            (lookup2D[(firstIndex + (worker.prev_chunk[i+7] << 8)) | worker.prev_chunk[i+6]] << 16);
+
+          *(uint64_t*)&worker.chunk[i] = val1 | ((uint64_t)val2 << 32);
+        }
+
+        // Groups of 4
+        for (int i = worker.pos2-((worker.pos2-worker.pos1)%8); i < worker.pos2-3; i += 4) {
+          __builtin_prefetch(&lookup2D[firstIndex + 256*n++],0,3);
+          uint32_t val = lookup2D[(firstIndex + (worker.prev_chunk[i+1] << 8)) | worker.prev_chunk[i]] |
+            (lookup2D[(firstIndex + (worker.prev_chunk[i+3] << 8)) | worker.prev_chunk[i+2]] << 16);
+          *(uint32_t*)&worker.chunk[i] = val;
+        }
+
+        // Groups of 2
+        for (int i = worker.pos2-((worker.pos2-worker.pos1)%4); i < worker.pos2-1; i += 2) {
+          __builtin_prefetch(&lookup2D[firstIndex + 256*n++],0,3);
+          uint16_t val = lookup2D[(firstIndex + (worker.prev_chunk[i+1] << 8)) | worker.prev_chunk[i]];
+          *(uint16_t*)&worker.chunk[i] = val;
+        }
+
+        // Last if odd
+        if ((worker.pos2-worker.pos1)%2 != 0) {
+          uint16_t val = lookup2D[firstIndex + (worker.prev_chunk[worker.pos2-1] << 8)];
+          worker.chunk[worker.pos2-1] = (val & 0xFF00) >> 8;
+        }
+      } else {
+        firstIndex = worker.branched_idx[worker.op]*256*256 + worker.chunk[worker.pos2]*256;
+        int n = 0;
+
+        // Manually unrolled loops for repetetive efficiency. Worst possible loop count for 3D
+        // lookups is now 4, with less than 4 being pretty common.
+
+        // Groups of 16
+        for(int i = worker.pos1; i < worker.pos2-15; i += 16) {
+          __builtin_prefetch(&lookup3D[firstIndex + 64*n++],0,3);
+          worker.chunk[i] = lookup3D[firstIndex + worker.prev_chunk[i]];
+          worker.chunk[i+1] = lookup3D[firstIndex + worker.prev_chunk[i+1]];
+          worker.chunk[i+2] = lookup3D[firstIndex + worker.prev_chunk[i+2]];
+          worker.chunk[i+3] = lookup3D[firstIndex + worker.prev_chunk[i+3]];
+          worker.chunk[i+4] = lookup3D[firstIndex + worker.prev_chunk[i+4]];
+          worker.chunk[i+5] = lookup3D[firstIndex + worker.prev_chunk[i+5]];
+          worker.chunk[i+6] = lookup3D[firstIndex + worker.prev_chunk[i+6]];
+          worker.chunk[i+7] = lookup3D[firstIndex + worker.prev_chunk[i+7]];
+
+          worker.chunk[i+8] = lookup3D[firstIndex + worker.prev_chunk[i+8]];
+          worker.chunk[i+9] = lookup3D[firstIndex + worker.prev_chunk[i+9]];
+          worker.chunk[i+10] = lookup3D[firstIndex + worker.prev_chunk[i+10]];
+          worker.chunk[i+11] = lookup3D[firstIndex + worker.prev_chunk[i+11]];
+          worker.chunk[i+12] = lookup3D[firstIndex + worker.prev_chunk[i+12]];
+          worker.chunk[i+13] = lookup3D[firstIndex + worker.prev_chunk[i+13]];
+          worker.chunk[i+14] = lookup3D[firstIndex + worker.prev_chunk[i+14]];
+          worker.chunk[i+15] = lookup3D[firstIndex + worker.prev_chunk[i+15]];
+        }
+
+        // Groups of 8
+        for(int i = worker.pos2-((worker.pos2-worker.pos1)%16); i < worker.pos2-7; i += 8) {
+          __builtin_prefetch(&lookup3D[firstIndex + 64*n++],0,3);
+          worker.chunk[i] = lookup3D[firstIndex + worker.prev_chunk[i]];
+          worker.chunk[i+1] = lookup3D[firstIndex + worker.prev_chunk[i+1]];
+          worker.chunk[i+2] = lookup3D[firstIndex + worker.prev_chunk[i+2]];
+          worker.chunk[i+3] = lookup3D[firstIndex + worker.prev_chunk[i+3]];
+          worker.chunk[i+4] = lookup3D[firstIndex + worker.prev_chunk[i+4]];
+          worker.chunk[i+5] = lookup3D[firstIndex + worker.prev_chunk[i+5]];
+          worker.chunk[i+6] = lookup3D[firstIndex + worker.prev_chunk[i+6]];
+          worker.chunk[i+7] = lookup3D[firstIndex + worker.prev_chunk[i+7]];
+        }
+
+        // Groups of 4
+        for(int i = worker.pos2-((worker.pos2-worker.pos1)%8); i < worker.pos2-3; i+= 4) {
+          __builtin_prefetch(&lookup3D[firstIndex + 64*n++],0,3);
+          worker.chunk[i] = lookup3D[firstIndex + worker.prev_chunk[i]];
+          worker.chunk[i+1] = lookup3D[firstIndex + worker.prev_chunk[i+1]];
+          worker.chunk[i+2] = lookup3D[firstIndex + worker.prev_chunk[i+2]];
+          worker.chunk[i+3] = lookup3D[firstIndex + worker.prev_chunk[i+3]];
+        }
+
+        // Groups of 2
+        for(int i = worker.pos2-((worker.pos2-worker.pos1)%4); i < worker.pos2-1; i+= 2) {
+          __builtin_prefetch(&lookup3D[firstIndex + 64*n++],0,3);
+          worker.chunk[i] = lookup3D[firstIndex + worker.prev_chunk[i]];
+          worker.chunk[i+1] = lookup3D[firstIndex + worker.prev_chunk[i+1]];
+        }
+
+        // Last if odd
+        if ((worker.pos2-worker.pos1)%2 != 0) {
+          worker.chunk[worker.pos2-1] = lookup3D[firstIndex + worker.prev_chunk[worker.pos2-1]];
+        }
+      }
+      if (worker.op == 0) {
+        if ((worker.pos2-worker.pos1)%2 == 1) {
+          worker.t1 = worker.chunk[worker.pos1];
+          worker.t2 = worker.chunk[worker.pos2];
+          worker.chunk[worker.pos1] = reverse8(worker.t2);
+          worker.chunk[worker.pos2] = reverse8(worker.t1);
+        }
+      }
+    }
+
+after:
+    // if (op == 53) {
+    //   std::cout << hexStr(worker.step_3, 256) << std::endl << std::endl;
+    //   std::cout << hexStr(&worker.step_3[worker.pos1], 1) << std::endl;
+    //   std::cout << hexStr(&worker.step_3[worker.pos2], 1) << std::endl;
+    // }
+
+    worker.A = (worker.chunk[worker.pos1] - worker.chunk[worker.pos2]);
+    worker.A = (256 + (worker.A % 256)) % 256;
+
+    if (worker.A < 0x10)
+    { // 6.25 % probability
+      // __builtin_prefetch(worker.step_3);
+      worker.prev_lhash = worker.lhash + worker.prev_lhash;
+      worker.lhash = XXHash64::hash(worker.chunk, worker.pos2, 0);
+
+      // uint64_t test = XXHash64::hash(worker.step_3, worker.pos2, 0);
+      if (worker.op == sus_op && debugOpOrder)  printf("Lookup: A: new worker.lhash: %08jx\n", worker.lhash);
+    }
+
+    if (worker.A < 0x20)
+    { // 12.5 % probability
+      // __builtin_prefetch(worker.step_3);
+      worker.prev_lhash = worker.lhash + worker.prev_lhash;
+      worker.lhash = hash_64_fnv1a(worker.chunk, worker.pos2);
+
+      // uint64_t test = hash_64_fnv1a(worker.step_3, worker.pos2);
+      if (worker.op == sus_op && debugOpOrder)  printf("Lookup: B: new worker.lhash: %08jx\n", worker.lhash);
+    }
+
+    if (worker.A < 0x30)
+    { // 18.75 % probability
+      // std::copy(worker.step_3, worker.step_3 + worker.pos2, s3);
+      // __builtin_prefetch(worker.step_3);
+      worker.prev_lhash = worker.lhash + worker.prev_lhash;
+      HH_ALIGNAS(16)
+      const highwayhash::HH_U64 key2[2] = {worker.tries, worker.prev_lhash};
+      worker.lhash = highwayhash::SipHash(key2, (char*)worker.chunk, worker.pos2); // more deviations
+
+      // uint64_t test = highwayhash::SipHash(key2, (char*)worker.step_3, worker.pos2); // more deviations
+      if (worker.op == sus_op && debugOpOrder)  printf("Lookup: C: new worker.lhash: %08jx\n", worker.lhash);
+    }
+
+    if (worker.A <= 0x40)
+    { // 25% probablility
+      // if (worker.op == sus_op && debugOpOrder) {
+      //   printf("Lookup: D: RC4 key:\n");
+      //   for (int i = 0; i < 256; i++) {
+      //     printf("%d, ", worker.key.data[i]);
+      //   }
+      // }
+      // prefetch(worker.step_3, 0, 1);
+      RC4(&worker.key, 256, worker.chunk,  worker.chunk);
+    }
+
+    worker.chunk[255] = worker.chunk[255] ^ worker.chunk[worker.pos1] ^ worker.chunk[worker.pos2];
+
+    if (debugOpOrder && worker.op == sus_op) {
+      printf("Lookup op %d result:\n", worker.op);
+      for (int i = 0; i < 256; i++) {
+          printf("%02X ", worker.chunk[i]);
+      }
+      printf("\n");
+    }
+
+    // memcpy(&worker.sData[(worker.tries - 1) * 256], worker.step_3, 256);
+
+    // std::copy(worker.step_3, worker.step_3 + 256, &worker.sData[(worker.tries - 1) * 256]);
+
+    // memcpy(&worker->data.data()[(worker.tries - 1) * 256], worker.step_3, 256);
+
+    // std::cout << hexStr(worker.step_3, 256) << std::endl;
+
+    if (worker.tries > 260 + 16 || (worker.sData[(worker.tries-1)*256+255] >= 0xf0 && worker.tries > 260))
+    {
+      break;
+    }
+  }
+  worker.data_len = static_cast<uint32_t>((worker.tries - 4) * 256 + (((static_cast<uint64_t>(worker.chunk[253]) << 8) | static_cast<uint64_t>(worker.chunk[254])) & 0x3ff));
+}
