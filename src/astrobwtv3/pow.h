@@ -32,6 +32,9 @@
 #ifdef __X86_64__
   #include "immintrin.h"
 #endif
+#ifdef __aarch64__
+  #include <arm_neon.h>
+#endif
 #include "libsais.h"
 
 #ifndef POW_CONST
@@ -565,7 +568,21 @@ leftRotate8(byte n, unsigned d)
 void bitCountLookup();
 inline byte reverse8(byte b)
 {
+  #ifdef __X86_64__
   return (b * 0x0202020202ULL & 0x010884422010ULL) % 1023;
+  #else
+      // Load the input byte into a Neon vector
+    uint8x8_t vec_input = vdup_n_u8(b);
+
+    // Reverse the bits in the Neon vector
+    uint8x8_t vec_output = vrev64_u8(vec_input);
+
+    // Extract the result byte from the Neon vector
+    uint8_t output;
+    vst1_u8(&output, vec_output);
+
+    return output;
+  #endif
 }
 
 inline byte countSetBits(byte n)
@@ -703,6 +720,8 @@ void lookupCompute(workerData &worker);
 void branchComputeCPU(workerData &worker, bool isTest=false);
 
 void branchComputeCPU_avx2(workerData &worker, bool isTest=false);
+
+void branchComputeCPU_aarch64(workerData &worker, bool isTest=false);
 
 void AstroBWTv3(byte *input, int inputLen, byte *outputhash, workerData &scratch, bool lookupMine);
 

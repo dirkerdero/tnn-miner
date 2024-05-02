@@ -42,6 +42,8 @@ cmake_print_variables(CMAKE_SYSTEM_PROCESSOR)
 
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
   set(MARCH "armv8.2-a")
+  set(CMAKE_C_FLAGS_RELEASE   "${CMAKE_C_FLAGS_RELEASE} -flax-vector-conversions")
+  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -flax-vector-conversions")
 endif()
 set(CMAKE_C_FLAGS_RELEASE   "${CMAKE_C_FLAGS_RELEASE}   -static -O3 -g -fPIE -ftree-vectorize -DNDEBUG")
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -static -O3 -g -pthread -Wuninitialized -march=${MARCH} -DNDEBUG")
