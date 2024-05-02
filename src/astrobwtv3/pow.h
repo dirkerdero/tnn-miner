@@ -29,7 +29,9 @@
 // #include <cuda.h>
 // #include <cuda_runtime.h>
 
-#include "immintrin.h"
+#ifdef __X86_64__
+  #include "immintrin.h"
+#endif
 #include "libsais.h"
 
 #ifndef POW_CONST

@@ -19,8 +19,10 @@
 #include <unordered_map>
 #include <array>
 #include <algorithm>
-#include <xmmintrin.h>
-#include <emmintrin.h>
+#ifdef __X86_64__
+  #include <xmmintrin.h>
+  #include <emmintrin.h>
+#endif
 
 #include <random>
 #include <chrono>
@@ -56,7 +58,9 @@ extern "C"
 // #include <device_sa.cuh>
 #include <lookup.h>
 // #include <sacak-lcp.h>
-#include "immintrin.h"
+#ifdef __X86_64__
+  #include "immintrin.h"
+#endif
 #include "dc3.hpp"
 // #include "fgsaca.hpp"
 #include <hugepages.h>
@@ -3465,8 +3469,8 @@ void optest(int op, workerData &worker, bool print=true) {
   }
 }
 
-#if defined(__AVX2__)
 void optest_simd(int op, workerData &worker, bool print=true) {
+#if defined(__AVX2__)
   if (print){
     printf("SIMD\npre op %d: ", op);
     for (int i = worker.pos1; i < worker.pos1 + 32; i++) {
@@ -7064,8 +7068,10 @@ void optest_simd(int op, workerData &worker, bool print=true) {
     }
     printf("\n took %ld ns\n", time.count());
   }
+  #else
+    printf("Only supported for X86\n");
+  #endif
 }
-#endif
 
 void optest_lookup(int op, workerData &worker, bool print=true) {
   if (print){
@@ -14797,8 +14803,12 @@ void lookupCompute(workerData &worker)
 
       // Copy the blocks before worker.pos1
       for (int i = start_block; i < end_block; i++) {
+#ifdef __X86_64__
           __m128i prev_data = _mm_loadu_si128((__m128i*)&worker.prev_chunk[i * 16]);
           _mm_storeu_si128((__m128i*)&worker.chunk[i * 16], prev_data);
+#else
+	  worker.chunk[i] = worker.prev_chunk[i];
+#endif
       }
 
       // Copy the remaining bytes before worker.pos1
@@ -14812,8 +14822,12 @@ void lookupCompute(workerData &worker)
 
       // Copy the blocks after worker.pos2
       for (int i = start_block; i < end_block; i++) {
+#ifdef __X86_64__
           __m128i prev_data = _mm_loadu_si128((__m128i*)&worker.prev_chunk[i * 16]);
           _mm_storeu_si128((__m128i*)&worker.chunk[i * 16], prev_data);
+#else
+	  worker.chunk[i] = worker.prev_chunk[i];
+#endif
       }
 
       // Copy the remaining bytes after worker.pos2

@@ -1,8 +1,22 @@
 cmake_minimum_required(VERSION 3.16.3)
 
+include(CMakePrintHelpers)
+
+project(
+  Tnn-miner
+  VERSION 0.3.1
+  DESCRIPTION "Open Source Astrobwt Miner"
+)
+
+
+set(MARCH "native")
+
+cmake_print_variables(CMAKE_SYSTEM_PROCESSOR)
+#if(CMAKE_HOST_SYSTEM_PROCESSOR)
+
 set(CMAKE_BUILD_TYPE Release)
-set(CMAKE_C_FLAGS_RELEASE   "${CMAKE_C_FLAGS_RELEASE}   -static -O3 -g -fPIE -ftree-vectorize -DNDEBUG")
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -static -O3 -g -pthread -m64 -Wuninitialized -march=native -DNDEBUG")
+#set(CMAKE_C_FLAGS_RELEASE   "${CMAKE_C_FLAGS_RELEASE}   -static -O3 -g -fPIE -ftree-vectorize -DNDEBUG")
+#set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -static -O3 -g -pthread -m64 -Wuninitialized -march=native -DNDEBUG")
 
 if(USE_GCC)
   set(CMAKE_C_COMPILER gcc)
@@ -11,8 +25,8 @@ if(USE_GCC)
   set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -Wno-deprecated-declarations")
   set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -Wno-deprecated-declarations")
 else()
-  set(CMAKE_C_COMPILER clang)
-  set(CMAKE_CXX_COMPILER clang++)
+	#set(CMAKE_C_COMPILER clang)
+	#set(CMAKE_CXX_COMPILER clang++)
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fuse-ld=lld")
   set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -Wno-deprecated")
   set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -Wno-deprecated")
@@ -24,6 +38,13 @@ project(
   DESCRIPTION "Open Source Astrobwt Miner"
 )
 
+cmake_print_variables(CMAKE_SYSTEM_PROCESSOR)
+
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
+  set(MARCH "armv8.2-a")
+endif()
+set(CMAKE_C_FLAGS_RELEASE   "${CMAKE_C_FLAGS_RELEASE}   -static -O3 -g -fPIE -ftree-vectorize -DNDEBUG")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -static -O3 -g -pthread -Wuninitialized -march=${MARCH} -DNDEBUG")
 # if(WIN32)
 # set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
 # endif()
@@ -36,7 +57,7 @@ project(
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fstack-protector")
 
 set (CMAKE_STANDARD_REQUIRED TRUE)
-set (CMAKE_CXX_STANDARD 23)
+set (CMAKE_CXX_STANDARD 20)
 
 enable_language(ASM)
 
