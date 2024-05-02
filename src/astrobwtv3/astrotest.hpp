@@ -1,6 +1,7 @@
 #ifndef astrotest_h
 #define astrotest_h
 
+#include <bit>
 #include <bitset>
 #include <filesystem>
 #include <fstream>
