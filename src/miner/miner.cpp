@@ -1299,7 +1299,7 @@ int main(int argc, char **argv)
   // Ensure we capture *all* of the other options before we start using goto
   if (vm.count("dero-test"))
   {
-    int rc = DeroTesting(testOp, testLen);
+    int rc = DeroTesting(testOp, testLen, useLookupMine);
     if(rc > 255) {
       rc = 1;
     }

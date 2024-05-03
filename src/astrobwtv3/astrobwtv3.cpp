@@ -194,7 +194,6 @@ void AstroBWTv3(byte *input, int inputLen, byte *outputhash, workerData &worker,
     if (lookupMine) {
       // start = std::chrono::steady_clock::now();
       lookupCompute(worker);
-      //branchComputeCPU(worker);
       // end = std::chrono::steady_clock::now();
     }
     else {
@@ -202,7 +201,7 @@ void AstroBWTv3(byte *input, int inputLen, byte *outputhash, workerData &worker,
       #ifdef __X86_64__
       branchComputeCPU_avx2(worker);
       #else
-      branchComputeCPU_aarch64(worker);
+      branchComputeCPU_aarch64(worker, false);
       #endif
       // end = std::chrono::steady_clock::now();
     }
@@ -7156,7 +7155,7 @@ void branchComputeCPU_avx2(workerData &worker, bool isTest)
   #else
     printf("Only supported for X86\n");
     exit(0);
-  #endif
+  #endif  // __AVX2__
 }
 
 void optest_lookup(int op, workerData &worker, bool print=true) {
@@ -7662,17 +7661,21 @@ after:
 
 void branchComputeCPU_aarch64(workerData &worker, bool isTest)
 {
+  if (debugOpOrder) printf("cpu\n");
+  
   while (true)
   {
     if(isTest) {
 
     } else {
       worker.tries++;
+      if (debugOpOrder) printf("t: 0x%lx p: 0x%lx l: 0x%lx\n", worker.tries, worker.prev_lhash, worker.lhash);
       worker.random_switcher = worker.prev_lhash ^ worker.lhash ^ worker.tries;
+      // __builtin_prefetch(&worker.random_switcher,0,3);
       // printf("%d worker.random_switcher %d %08jx\n", worker.tries, worker.random_switcher, worker.random_switcher);
 
       worker.op = static_cast<byte>(worker.random_switcher);
-      if (debugOpOrder) worker.opsA.push_back(worker.op);
+      //if (debugOpOrder) worker.opsA.push_back(worker.op);
 
       // printf("op: %d\n", worker.op);
 
@@ -7689,17 +7692,51 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
         worker.pos2 = worker.pos1 + ((worker.pos2 - worker.pos1) & 0x1f);
       }
 
-      // fmt::printf("op: %d, ", worker.op);
-      // fmt::printf("worker.pos1: %d, worker.pos2: %d\n", worker.pos1, worker.pos2);
+      worker.chunk = &worker.sData[(worker.tries - 1) * 256];
+      if (debugOpOrder) printf("worker.op: %03d p1: %03d p2: %03d\n", worker.op, worker.pos1, worker.pos2);
 
-      if (debugOpOrder && worker.op == sus_op) {
-        printf("Pre op %d, pos1: %d, pos2: %d::\n", worker.op, worker.pos1, worker.pos2);
-        for (int i = 0; i < 256; i++) {
-            printf("%02x ", worker.step_3[i]);
-        } 
+      if (worker.tries == 1) {
+        worker.prev_chunk = worker.chunk;
+      } else {
+        worker.prev_chunk = &worker.sData[(worker.tries - 2) * 256];
+      }
+
+      if (debugOpOrder) {
+        printf("tries: %03lu chunk_before[  0->%03d]: ", worker.tries, worker.pos2);
+        for (int x = 0; x <= worker.pos2+16 && worker.pos2+16 < 256; x++) {
+          printf("%02x", worker.chunk[x]);
+        }
+        printf("\n");
+      }
+
+      //for (int x = worker.pos1; x < worker.pos2; x++) {
+      //  worker.chunk[x] = worker.prev_chunk[x];
+      //}
+      
+      //for (int x = 0; x < 256; x++) {
+      //  worker.chunk[x] = worker.prev_chunk[x];
+      //}
+      memcpy(worker.chunk, worker.prev_chunk, 256);
+      if (debugOpOrder) {
+        printf("tries: %03lu  chunk_fixed[  0->%03d]: ", worker.tries, worker.pos2);
+        for (int x = 0; x <= worker.pos2+16 && worker.pos2+16 < 256; x++) {
+          //printf("%d \n", x);
+          printf("%02x", worker.chunk[x]);
+        }
         printf("\n");
       }
     }
+    
+    //printf("tries: %03d step_3[0->%-3d]: ", worker.tries, worker.pos2);
+    //for (int x = 0; x < worker.pos2; x++) {
+    //  printf("%02x", worker.step_3[x]);
+    //}
+    //printf("\n");
+
+    //printf("%02d ", worker.op);
+    //if(worker.tries > 100) {
+    //  break;
+    //}
 
     switch (worker.op)
     {
@@ -7708,68 +7745,39 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];             // ones count bits
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);                // rotate  bits by 5
-        worker.step_3[i] *= worker.step_3[i];                             // *
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);                // rotate  bits by 5
+        worker.chunk[i] *= worker.chunk[i];                             // *
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
 
         // INSERT_RANDOM_CODE_END
-        worker.t1 = worker.step_3[worker.pos1];
-        worker.t2 = worker.step_3[worker.pos2];
-        worker.step_3[worker.pos1] = reverse8(worker.t2);
-        worker.step_3[worker.pos2] = reverse8(worker.t1);
+        worker.t1 = worker.chunk[worker.pos1];
+        worker.t2 = worker.chunk[worker.pos2];
+        worker.chunk[worker.pos1] = reverse8(worker.t2);
+        worker.chunk[worker.pos2] = reverse8(worker.t1);
       }
       break;
     case 1:
-/*
 #pragma GCC unroll 32
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);                // rotate  bits by 1
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] += worker.step_3[i];                             // +
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);                // rotate  bits by 1
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] += worker.chunk[i];                             // +
                                                                           // INSERT_RANDOM_CODE_END
       }
-      */
-     {
-      // Load worker.step_3[worker.pos2]
-      uint8x16_t pos2_value = vld1q_u8(&worker.step_3[worker.pos2]);
-#pragma GCC unroll 32 
-    // Process 16 elements at a time
-    for (int i = worker.pos1; i < worker.pos2; i += 16) {
-        // Load 16 values of worker.step_3[i]
-        uint8x16_t value = vld1q_u8(&worker.step_3[i]);
-
-        // Perform worker.step_3[i] << (worker.step_3[i] & 3)
-        //auto intermediate = vandq_u8(value, vdupq_n_u8((uint8_t)3));
-        value = vshlq_n_u8(value, 3);
-
-        // Perform std::rotl(worker.step_3[i], 1)
-        //value = std::rotl(value, 1)
-        value = vreinterpretq_u8_u64(vextq_u8(vreinterpretq_u8_u64(value), vreinterpretq_u8_u64(value), 16 - 1));
-
-        // Perform worker.step_3[i] & worker.step_3[worker.pos2]
-        value = vandq_u8(value, pos2_value);
-
-        // Perform worker.step_3[i] += worker.step_3[i]
-        value = vaddq_u8(value, value);
-
-        // Store the result back to worker.step_3[i]
-        vst1q_u8(&worker.step_3[i], value);
-    }
-     }
       break;
     case 2:
 #pragma GCC unroll 32
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];          // ones count bits
-        worker.step_3[i] = reverse8(worker.step_3[i]);                 // reverse bits
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];          // ones count bits
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];          // ones count bits
+        worker.chunk[i] = reverse8(worker.chunk[i]);                 // reverse bits
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];          // ones count bits
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -7778,10 +7786,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);                // rotate  bits by 3
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);                // rotate  bits by 1
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);                // rotate  bits by 3
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);                // rotate  bits by 1
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -7790,10 +7798,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = ~worker.step_3[i];                             // binary NOT operator
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3);    // shift right
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                      // XOR and -
+        worker.chunk[i] = ~worker.chunk[i];                             // binary NOT operator
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3);    // shift right
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                      // XOR and -
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -7804,10 +7812,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       {
 
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];          // ones count bits
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                // XOR
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];          // ones count bits
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                // XOR
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
 
         // INSERT_RANDOM_CODE_END
       }
@@ -7818,10 +7826,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);             // rotate  bits by 3
-        worker.step_3[i] = ~worker.step_3[i];                          // binary NOT operator
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                   // XOR and -
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);             // rotate  bits by 3
+        worker.chunk[i] = ~worker.chunk[i];                          // binary NOT operator
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                   // XOR and -
 
         // INSERT_RANDOM_CODE_END
       }
@@ -7831,10 +7839,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] += worker.step_3[i];                             // +
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];             // ones count bits
-        worker.step_3[i] = ~worker.step_3[i];                             // binary NOT operator
+        worker.chunk[i] += worker.chunk[i];                             // +
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
+        worker.chunk[i] = ~worker.chunk[i];                             // binary NOT operator
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -7843,10 +7851,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = ~worker.step_3[i];               // binary NOT operator
-        worker.step_3[i] = std::rotl(worker.step_3[i], 10); // rotate  bits by 5
-        // worker.step_3[i] = std::rotl(worker.step_3[i], 5);// rotate  bits by 5
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
+        worker.chunk[i] = ~worker.chunk[i];               // binary NOT operator
+        worker.chunk[i] = std::rotl(worker.chunk[i], 10); // rotate  bits by 5
+        // worker.chunk[i] = std::rotl(worker.chunk[i], 5);// rotate  bits by 5
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -7855,10 +7863,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                // XOR
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);            // rotate  bits by 4
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);            // rotate  bits by 2
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                // XOR
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);            // rotate  bits by 4
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);            // rotate  bits by 2
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -7867,10 +7875,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = ~worker.step_3[i];              // binary NOT operator
-        worker.step_3[i] *= worker.step_3[i];              // *
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3); // rotate  bits by 3
-        worker.step_3[i] *= worker.step_3[i];              // *
+        worker.chunk[i] = ~worker.chunk[i];              // binary NOT operator
+        worker.chunk[i] *= worker.chunk[i];              // *
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3); // rotate  bits by 3
+        worker.chunk[i] *= worker.chunk[i];              // *
                                                            // INSERT_RANDOM_CODE_END
       }
       break;
@@ -7879,10 +7887,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 6); // rotate  bits by 1
-        // worker.step_3[i] = std::rotl(worker.step_3[i], 5);            // rotate  bits by 5
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
+        worker.chunk[i] = std::rotl(worker.chunk[i], 6); // rotate  bits by 1
+        // worker.chunk[i] = std::rotl(worker.chunk[i], 5);            // rotate  bits by 5
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -7891,10 +7899,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2); // rotate  bits by 2
-        worker.step_3[i] *= worker.step_3[i];               // *
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2); // rotate  bits by 2
-        worker.step_3[i] = ~worker.step_3[i];               // binary NOT operator
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
+        worker.chunk[i] *= worker.chunk[i];               // *
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
+        worker.chunk[i] = ~worker.chunk[i];               // binary NOT operator
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -7903,10 +7911,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);             // rotate  bits by 1
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                // XOR
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);             // rotate  bits by 5
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);             // rotate  bits by 1
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                // XOR
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);             // rotate  bits by 5
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -7915,10 +7923,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] *= worker.step_3[i];                          // *
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] *= worker.chunk[i];                          // *
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -7927,10 +7935,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);               // rotate  bits by 2
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                      // XOR and -
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);               // rotate  bits by 2
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                      // XOR and -
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -7939,10 +7947,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4); // rotate  bits by 4
-        worker.step_3[i] *= worker.step_3[i];               // *
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);  // rotate  bits by 1
-        worker.step_3[i] = ~worker.step_3[i];               // binary NOT operator
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4); // rotate  bits by 4
+        worker.chunk[i] *= worker.chunk[i];               // *
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);  // rotate  bits by 1
+        worker.chunk[i] = ~worker.chunk[i];               // binary NOT operator
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -7951,10 +7959,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= worker.step_3[worker.pos2];    // XOR
-        worker.step_3[i] *= worker.step_3[i];              // *
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5); // rotate  bits by 5
-        worker.step_3[i] = ~worker.step_3[i];              // binary NOT operator
+        worker.chunk[i] ^= worker.chunk[worker.pos2];    // XOR
+        worker.chunk[i] *= worker.chunk[i];              // *
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5); // rotate  bits by 5
+        worker.chunk[i] = ~worker.chunk[i];              // binary NOT operator
                                                            // INSERT_RANDOM_CODE_END
       }
       break;
@@ -7963,10 +7971,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4); // rotate  bits by 4
-        worker.step_3[i] = std::rotl(worker.step_3[i], 9);  // rotate  bits by 3
-        // worker.step_3[i] = std::rotl(worker.step_3[i], 1);             // rotate  bits by 1
-        // worker.step_3[i] = std::rotl(worker.step_3[i], 5);         // rotate  bits by 5
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4); // rotate  bits by 4
+        worker.chunk[i] = std::rotl(worker.chunk[i], 9);  // rotate  bits by 3
+        // worker.chunk[i] = std::rotl(worker.chunk[i], 1);             // rotate  bits by 1
+        // worker.chunk[i] = std::rotl(worker.chunk[i], 5);         // rotate  bits by 5
         // INSERT_RANDOM_CODE_END
       }
       break;
@@ -7975,10 +7983,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                   // XOR and -
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);             // rotate  bits by 5
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] += worker.step_3[i];                          // +
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                   // XOR and -
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);             // rotate  bits by 5
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] += worker.chunk[i];                          // +
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -7987,10 +7995,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
-        worker.step_3[i] = reverse8(worker.step_3[i]);                    // reverse bits
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);               // rotate  bits by 2
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
+        worker.chunk[i] = reverse8(worker.chunk[i]);                    // reverse bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);               // rotate  bits by 2
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -7999,10 +8007,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);                // rotate  bits by 1
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
-        worker.step_3[i] += worker.step_3[i];                             // +
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);                // rotate  bits by 1
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
+        worker.chunk[i] += worker.chunk[i];                             // +
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8011,10 +8019,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] = reverse8(worker.step_3[i]);                 // reverse bits
-        worker.step_3[i] *= worker.step_3[i];                          // *
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);             // rotate  bits by 1
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] = reverse8(worker.chunk[i]);                 // reverse bits
+        worker.chunk[i] *= worker.chunk[i];                          // *
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);             // rotate  bits by 1
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8023,10 +8031,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 4); // rotate  bits by 3
-        // worker.step_3[i] = std::rotl(worker.step_3[i], 1);                           // rotate  bits by 1
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];             // ones count bits
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
+        worker.chunk[i] = std::rotl(worker.chunk[i], 4); // rotate  bits by 3
+        // worker.chunk[i] = std::rotl(worker.chunk[i], 1);                           // rotate  bits by 1
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8035,10 +8043,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] += worker.step_3[i];                          // +
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);            // rotate  bits by 4
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);             // rotate  bits by 5
+        worker.chunk[i] += worker.chunk[i];                          // +
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);            // rotate  bits by 4
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);             // rotate  bits by 5
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8047,10 +8055,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];             // ones count bits
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);                // rotate  bits by 3
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                      // XOR and -
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);                // rotate  bits by 3
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                      // XOR and -
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8059,10 +8067,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] *= worker.step_3[i];                 // *
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] += worker.step_3[i];                 // +
-        worker.step_3[i] = reverse8(worker.step_3[i]);        // reverse bits
+        worker.chunk[i] *= worker.chunk[i];                 // *
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] += worker.chunk[i];                 // +
+        worker.chunk[i] = reverse8(worker.chunk[i]);        // reverse bits
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8071,10 +8079,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);                // rotate  bits by 5
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);               // rotate  bits by 4
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);                // rotate  bits by 5
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);                // rotate  bits by 5
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);               // rotate  bits by 4
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);                // rotate  bits by 5
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8083,10 +8091,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] += worker.step_3[i];                          // +
-        worker.step_3[i] += worker.step_3[i];                          // +
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);             // rotate  bits by 5
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] += worker.chunk[i];                          // +
+        worker.chunk[i] += worker.chunk[i];                          // +
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);             // rotate  bits by 5
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8095,10 +8103,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] *= worker.step_3[i];                          // *
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                // XOR
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] += worker.step_3[i];                          // +
+        worker.chunk[i] *= worker.chunk[i];                          // *
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                // XOR
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] += worker.chunk[i];                          // +
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8107,10 +8115,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);               // rotate  bits by 4
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);                // rotate  bits by 5
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);               // rotate  bits by 4
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);                // rotate  bits by 5
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8119,10 +8127,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = ~worker.step_3[i];                          // binary NOT operator
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);            // rotate  bits by 2
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] *= worker.step_3[i];                          // *
+        worker.chunk[i] = ~worker.chunk[i];                          // binary NOT operator
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);            // rotate  bits by 2
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] *= worker.chunk[i];                          // *
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8131,10 +8139,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2); // rotate  bits by 2
-        worker.step_3[i] = reverse8(worker.step_3[i]);      // reverse bits
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);  // rotate  bits by 3
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2); // rotate  bits by 2
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
+        worker.chunk[i] = reverse8(worker.chunk[i]);      // reverse bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);  // rotate  bits by 3
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8143,10 +8151,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);               // rotate  bits by 4
-        worker.step_3[i] = reverse8(worker.step_3[i]);                    // reverse bits
-        worker.step_3[i] *= worker.step_3[i];                             // *
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);               // rotate  bits by 4
+        worker.chunk[i] = reverse8(worker.chunk[i]);                    // reverse bits
+        worker.chunk[i] *= worker.chunk[i];                             // *
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8155,10 +8163,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                   // XOR and -
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                   // XOR and -
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                   // XOR and -
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                   // XOR and -
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8167,10 +8175,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] += worker.step_3[i];              // +
-        worker.step_3[i] = ~worker.step_3[i];              // binary NOT operator
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1); // rotate  bits by 1
-        worker.step_3[i] ^= worker.step_3[worker.pos2];    // XOR
+        worker.chunk[i] += worker.chunk[i];              // +
+        worker.chunk[i] = ~worker.chunk[i];              // binary NOT operator
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1); // rotate  bits by 1
+        worker.chunk[i] ^= worker.chunk[worker.pos2];    // XOR
                                                            // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8179,10 +8187,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);    // rotate  bits by 1
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);   // rotate  bits by 2
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);    // rotate  bits by 1
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);    // rotate  bits by 1
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);   // rotate  bits by 2
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);    // rotate  bits by 1
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8191,10 +8199,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3);    // shift right
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3);    // shift right
-        worker.step_3[i] *= worker.step_3[i];                             // *
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3);    // shift right
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3);    // shift right
+        worker.chunk[i] *= worker.chunk[i];                             // *
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8203,10 +8211,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3);    // shift right
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);                // rotate  bits by 3
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];             // ones count bits
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3);    // shift right
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);                // rotate  bits by 3
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8215,10 +8223,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);               // rotate  bits by 2
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3);    // shift right
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);               // rotate  bits by 2
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3);    // shift right
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8227,10 +8235,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];             // ones count bits
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8239,10 +8247,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);  // rotate  bits by 5
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);        // XOR and -
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);  // rotate  bits by 3
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4); // rotate  bits by 4
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);  // rotate  bits by 5
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);        // XOR and -
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);  // rotate  bits by 3
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4); // rotate  bits by 4
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8251,10 +8259,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 4); // rotate  bits by 1
-        // worker.step_3[i] = std::rotl(worker.step_3[i], 3);                // rotate  bits by 3
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);               // rotate  bits by 2
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
+        worker.chunk[i] = std::rotl(worker.chunk[i], 4); // rotate  bits by 1
+        // worker.chunk[i] = std::rotl(worker.chunk[i], 3);                // rotate  bits by 3
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);               // rotate  bits by 2
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8263,10 +8271,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] += worker.step_3[i];                             // +
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                      // XOR and -
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] += worker.chunk[i];                             // +
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                      // XOR and -
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8275,10 +8283,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];             // ones count bits
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];             // ones count bits
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);                // rotate  bits by 3
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);                // rotate  bits by 3
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8287,10 +8295,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 10); // rotate  bits by 5
-        // worker.step_3[i] = std::rotl(worker.step_3[i], 5);                       // rotate  bits by 5
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];             // ones count bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 10); // rotate  bits by 5
+        // worker.chunk[i] = std::rotl(worker.chunk[i], 5);                       // rotate  bits by 5
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8299,10 +8307,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] += worker.step_3[i];                 // +
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);    // rotate  bits by 5
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);   // rotate  bits by 4
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] += worker.chunk[i];                 // +
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);    // rotate  bits by 5
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);   // rotate  bits by 4
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8311,10 +8319,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);                // rotate  bits by 5
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);                // rotate  bits by 5
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);                // rotate  bits by 5
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);                // rotate  bits by 5
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8323,10 +8331,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        // worker.step_3[i] = ~worker.step_3[i];                    // binary NOT operator
-        // worker.step_3[i] = ~worker.step_3[i];                    // binary NOT operator
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5); // rotate  bits by 5
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        // worker.chunk[i] = ~worker.chunk[i];                    // binary NOT operator
+        // worker.chunk[i] = ~worker.chunk[i];                    // binary NOT operator
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5); // rotate  bits by 5
                                                            // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8335,10 +8343,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] += worker.step_3[i];                 // +
-        worker.step_3[i] = reverse8(worker.step_3[i]);        // reverse bits
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);   // rotate  bits by 4
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] += worker.chunk[i];                 // +
+        worker.chunk[i] = reverse8(worker.chunk[i]);        // reverse bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);   // rotate  bits by 4
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8347,10 +8355,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = reverse8(worker.step_3[i]);     // reverse bits
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3); // rotate  bits by 3
-        worker.step_3[i] += worker.step_3[i];              // +
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1); // rotate  bits by 1
+        worker.chunk[i] = reverse8(worker.chunk[i]);     // reverse bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3); // rotate  bits by 3
+        worker.chunk[i] += worker.chunk[i];              // +
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1); // rotate  bits by 1
                                                            // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8359,10 +8367,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= worker.step_3[worker.pos2];     // XOR
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4); // rotate  bits by 4
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4); // rotate  bits by 4
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);  // rotate  bits by 5
+        worker.chunk[i] ^= worker.chunk[worker.pos2];     // XOR
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4); // rotate  bits by 4
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4); // rotate  bits by 4
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);  // rotate  bits by 5
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8371,10 +8379,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3);    // shift right
-        worker.step_3[i] = ~worker.step_3[i];                             // binary NOT operator
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];             // ones count bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3);    // shift right
+        worker.chunk[i] = ~worker.chunk[i];                             // binary NOT operator
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8383,10 +8391,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] += worker.step_3[i];                 // +
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);   // rotate  bits by 4
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);   // rotate  bits by 4
+        worker.chunk[i] += worker.chunk[i];                 // +
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);   // rotate  bits by 4
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);   // rotate  bits by 4
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8396,10 +8404,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = reverse8(worker.step_3[i]);  // reverse bits
-        worker.step_3[i] ^= worker.step_3[worker.pos2]; // XOR
-        // worker.step_3[i] = ~worker.step_3[i];    // binary NOT operator
-        // worker.step_3[i] = ~worker.step_3[i];    // binary NOT operator
+        worker.chunk[i] = reverse8(worker.chunk[i]);  // reverse bits
+        worker.chunk[i] ^= worker.chunk[worker.pos2]; // XOR
+        // worker.chunk[i] = ~worker.chunk[i];    // binary NOT operator
+        // worker.chunk[i] = ~worker.chunk[i];    // binary NOT operator
         // INSERT_RANDOM_CODE_END
       }
 
@@ -8409,10 +8417,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = reverse8(worker.step_3[i]);      // reverse bits
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4); // rotate  bits by 4
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4); // rotate  bits by 4
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);  // rotate  bits by 1
+        worker.chunk[i] = reverse8(worker.chunk[i]);      // reverse bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4); // rotate  bits by 4
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4); // rotate  bits by 4
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);  // rotate  bits by 1
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8421,10 +8429,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2); // rotate  bits by 2
-        worker.step_3[i] *= worker.step_3[i];               // *
-        worker.step_3[i] = ~worker.step_3[i];               // binary NOT operator
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);  // rotate  bits by 1
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
+        worker.chunk[i] *= worker.chunk[i];               // *
+        worker.chunk[i] = ~worker.chunk[i];               // binary NOT operator
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);  // rotate  bits by 1
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8433,10 +8441,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] = std::rotl(worker.step_3[i], 8);                // rotate  bits by 5
-        // worker.step_3[i] = std::rotl(worker.step_3[i], 3);                // rotate  bits by 3
-        worker.step_3[i] = reverse8(worker.step_3[i]); // reverse bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] = std::rotl(worker.chunk[i], 8);                // rotate  bits by 5
+        // worker.chunk[i] = std::rotl(worker.chunk[i], 3);                // rotate  bits by 3
+        worker.chunk[i] = reverse8(worker.chunk[i]); // reverse bits
                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8445,10 +8453,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = reverse8(worker.step_3[i]);                    // reverse bits
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);               // rotate  bits by 2
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] += worker.step_3[i];                             // +
+        worker.chunk[i] = reverse8(worker.chunk[i]);                    // reverse bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);               // rotate  bits by 2
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] += worker.chunk[i];                             // +
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8457,10 +8465,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);                // rotate  bits by 1
-        worker.step_3[i] *= worker.step_3[i];                             // *
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] = ~worker.step_3[i];                             // binary NOT operator
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);                // rotate  bits by 1
+        worker.chunk[i] *= worker.chunk[i];                             // *
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] = ~worker.chunk[i];                             // binary NOT operator
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8469,10 +8477,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= worker.step_3[worker.pos2];    // XOR
-        worker.step_3[i] = ~worker.step_3[i];              // binary NOT operator
-        worker.step_3[i] *= worker.step_3[i];              // *
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3); // rotate  bits by 3
+        worker.chunk[i] ^= worker.chunk[worker.pos2];    // XOR
+        worker.chunk[i] = ~worker.chunk[i];              // binary NOT operator
+        worker.chunk[i] *= worker.chunk[i];              // *
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3); // rotate  bits by 3
                                                            // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8481,10 +8489,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);             // rotate  bits by 5
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] = std::rotl(worker.step_3[i], 8);             // rotate  bits by 3
-        // worker.step_3[i] = std::rotl(worker.step_3[i], 5);// rotate  bits by 5
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);             // rotate  bits by 5
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] = std::rotl(worker.chunk[i], 8);             // rotate  bits by 3
+        // worker.chunk[i] = std::rotl(worker.chunk[i], 5);// rotate  bits by 5
         // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8493,10 +8501,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] = ~worker.step_3[i];                             // binary NOT operator
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);               // rotate  bits by 2
-        worker.step_3[i] += worker.step_3[i];                             // +
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] = ~worker.chunk[i];                             // binary NOT operator
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);               // rotate  bits by 2
+        worker.chunk[i] += worker.chunk[i];                             // +
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8505,10 +8513,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);    // rotate  bits by 5
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);          // XOR and -
-        worker.step_3[i] += worker.step_3[i];                 // +
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);    // rotate  bits by 5
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);          // XOR and -
+        worker.chunk[i] += worker.chunk[i];                 // +
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8517,10 +8525,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= worker.step_3[worker.pos2];     // XOR
-        worker.step_3[i] = reverse8(worker.step_3[i]);      // reverse bits
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4); // rotate  bits by 4
-        worker.step_3[i] *= worker.step_3[i];               // *
+        worker.chunk[i] ^= worker.chunk[worker.pos2];     // XOR
+        worker.chunk[i] = reverse8(worker.chunk[i]);      // reverse bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4); // rotate  bits by 4
+        worker.chunk[i] *= worker.chunk[i];               // *
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8529,10 +8537,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 8); // rotate  bits by 5
-        // worker.step_3[i] = std::rotl(worker.step_3[i], 3);             // rotate  bits by 3
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2); // rotate  bits by 2
-        worker.step_3[i] *= worker.step_3[i];               // *
+        worker.chunk[i] = std::rotl(worker.chunk[i], 8); // rotate  bits by 5
+        // worker.chunk[i] = std::rotl(worker.chunk[i], 3);             // rotate  bits by 3
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
+        worker.chunk[i] *= worker.chunk[i];               // *
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8541,10 +8549,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2); // rotate  bits by 2
-        worker.step_3[i] = reverse8(worker.step_3[i]);      // reverse bits
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4); // rotate  bits by 4
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);  // rotate  bits by 1
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
+        worker.chunk[i] = reverse8(worker.chunk[i]);      // reverse bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4); // rotate  bits by 4
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);  // rotate  bits by 1
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8553,10 +8561,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);    // rotate  bits by 1
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);   // rotate  bits by 2
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);    // rotate  bits by 5
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);    // rotate  bits by 1
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);   // rotate  bits by 2
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);    // rotate  bits by 5
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8565,10 +8573,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] = ~worker.step_3[i];                             // binary NOT operator
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);               // rotate  bits by 4
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] = ~worker.chunk[i];                             // binary NOT operator
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);               // rotate  bits by 4
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8577,10 +8585,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] += worker.step_3[i];                          // +
-        worker.step_3[i] *= worker.step_3[i];                          // *
-        worker.step_3[i] = reverse8(worker.step_3[i]);                 // reverse bits
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
+        worker.chunk[i] += worker.chunk[i];                          // +
+        worker.chunk[i] *= worker.chunk[i];                          // *
+        worker.chunk[i] = reverse8(worker.chunk[i]);                 // reverse bits
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8589,10 +8597,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                // XOR
-        worker.step_3[i] *= worker.step_3[i];                          // *
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);            // rotate  bits by 4
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                // XOR
+        worker.chunk[i] *= worker.chunk[i];                          // *
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);            // rotate  bits by 4
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8601,10 +8609,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);             // rotate  bits by 5
-        worker.step_3[i] = ~worker.step_3[i];                          // binary NOT operator
-        worker.step_3[i] *= worker.step_3[i];                          // *
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);             // rotate  bits by 5
+        worker.chunk[i] = ~worker.chunk[i];                          // binary NOT operator
+        worker.chunk[i] *= worker.chunk[i];                          // *
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8613,10 +8621,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = reverse8(worker.step_3[i]);                 // reverse bits
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];          // ones count bits
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                // XOR
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
+        worker.chunk[i] = reverse8(worker.chunk[i]);                 // reverse bits
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];          // ones count bits
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                // XOR
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8625,10 +8633,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] = reverse8(worker.step_3[i]);        // reverse bits
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);    // rotate  bits by 5
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);          // XOR and -
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] = reverse8(worker.chunk[i]);        // reverse bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);    // rotate  bits by 5
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);          // XOR and -
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8637,10 +8645,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] *= worker.step_3[i];                             // *
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);                // rotate  bits by 3
-        worker.step_3[i] = reverse8(worker.step_3[i]);                    // reverse bits
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
+        worker.chunk[i] *= worker.chunk[i];                             // *
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);                // rotate  bits by 3
+        worker.chunk[i] = reverse8(worker.chunk[i]);                    // reverse bits
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8649,10 +8657,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] *= worker.step_3[i];                             // *
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];             // ones count bits
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);               // rotate  bits by 4
+        worker.chunk[i] *= worker.chunk[i];                             // *
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);               // rotate  bits by 4
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8661,10 +8669,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);               // rotate  bits by 2
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);                // rotate  bits by 5
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3);    // shift right
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);               // rotate  bits by 2
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);                // rotate  bits by 5
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3);    // shift right
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8673,10 +8681,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);             // rotate  bits by 3
-        worker.step_3[i] += worker.step_3[i];                          // +
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];          // ones count bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);             // rotate  bits by 3
+        worker.chunk[i] += worker.chunk[i];                          // +
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];          // ones count bits
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8685,10 +8693,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] = reverse8(worker.step_3[i]);                    // reverse bits
-        worker.step_3[i] *= worker.step_3[i];                             // *
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                      // XOR and -
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] = reverse8(worker.chunk[i]);                    // reverse bits
+        worker.chunk[i] *= worker.chunk[i];                             // *
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                      // XOR and -
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8697,10 +8705,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4); // rotate  bits by 4
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2); // rotate  bits by 2
-        worker.step_3[i] += worker.step_3[i];               // +
-        worker.step_3[i] *= worker.step_3[i];               // *
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4); // rotate  bits by 4
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
+        worker.chunk[i] += worker.chunk[i];               // +
+        worker.chunk[i] *= worker.chunk[i];               // *
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8709,10 +8717,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
-        worker.step_3[i] += worker.step_3[i];                             // +
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
+        worker.chunk[i] += worker.chunk[i];                             // +
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8721,10 +8729,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);               // rotate  bits by 4
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];             // ones count bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);               // rotate  bits by 4
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8733,10 +8741,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= worker.step_3[worker.pos2]; // XOR
-        // worker.step_3[i] = ~worker.step_3[i];        // binary NOT operator
-        // worker.step_3[i] = ~worker.step_3[i];        // binary NOT operator
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
+        worker.chunk[i] ^= worker.chunk[worker.pos2]; // XOR
+        // worker.chunk[i] = ~worker.chunk[i];        // binary NOT operator
+        // worker.chunk[i] = ~worker.chunk[i];        // binary NOT operator
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8745,10 +8753,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] = reverse8(worker.step_3[i]);                 // reverse bits
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);             // rotate  bits by 3
-        worker.step_3[i] = reverse8(worker.step_3[i]);                 // reverse bits
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] = reverse8(worker.chunk[i]);                 // reverse bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);             // rotate  bits by 3
+        worker.chunk[i] = reverse8(worker.chunk[i]);                 // reverse bits
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8757,10 +8765,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                   // XOR and -
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);             // rotate  bits by 1
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] += worker.step_3[i];                          // +
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                   // XOR and -
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);             // rotate  bits by 1
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] += worker.chunk[i];                          // +
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8769,10 +8777,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3);    // shift right
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3);    // shift right
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8781,10 +8789,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);               // rotate  bits by 4
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);               // rotate  bits by 4
-        worker.step_3[i] = ~worker.step_3[i];                             // binary NOT operator
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);               // rotate  bits by 4
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);               // rotate  bits by 4
+        worker.chunk[i] = ~worker.chunk[i];                             // binary NOT operator
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8793,10 +8801,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] += worker.step_3[i];               // +
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);  // rotate  bits by 3
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4); // rotate  bits by 4
-        worker.step_3[i] += worker.step_3[i];               // +
+        worker.chunk[i] += worker.chunk[i];               // +
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);  // rotate  bits by 3
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4); // rotate  bits by 4
+        worker.chunk[i] += worker.chunk[i];               // +
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8805,10 +8813,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2); // rotate  bits by 2
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);  // rotate  bits by 1
-        worker.step_3[i] *= worker.step_3[i];               // *
-        worker.step_3[i] = ~worker.step_3[i];               // binary NOT operator
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);  // rotate  bits by 1
+        worker.chunk[i] *= worker.chunk[i];               // *
+        worker.chunk[i] = ~worker.chunk[i];               // binary NOT operator
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8817,10 +8825,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] += worker.step_3[i];               // +
-        worker.step_3[i] *= worker.step_3[i];               // *
-        worker.step_3[i] = ~worker.step_3[i];               // binary NOT operator
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2); // rotate  bits by 2
+        worker.chunk[i] += worker.chunk[i];               // +
+        worker.chunk[i] *= worker.chunk[i];               // *
+        worker.chunk[i] = ~worker.chunk[i];               // binary NOT operator
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8829,10 +8837,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = reverse8(worker.step_3[i]);     // reverse bits
-        worker.step_3[i] = std::rotl(worker.step_3[i], 6); // rotate  bits by 5
-        // worker.step_3[i] = std::rotl(worker.step_3[i], 1);    // rotate  bits by 1
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
+        worker.chunk[i] = reverse8(worker.chunk[i]);     // reverse bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 6); // rotate  bits by 5
+        // worker.chunk[i] = std::rotl(worker.chunk[i], 1);    // rotate  bits by 1
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8841,10 +8849,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];             // ones count bits
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);               // rotate  bits by 4
-        worker.step_3[i] = reverse8(worker.step_3[i]);                    // reverse bits
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);               // rotate  bits by 4
+        worker.chunk[i] = reverse8(worker.chunk[i]);                    // reverse bits
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8853,10 +8861,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];             // ones count bits
-        worker.step_3[i] = ~worker.step_3[i];                             // binary NOT operator
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];             // ones count bits
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
+        worker.chunk[i] = ~worker.chunk[i];                             // binary NOT operator
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8865,10 +8873,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);               // rotate  bits by 2
-        worker.step_3[i] *= worker.step_3[i];                             // *
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] += worker.step_3[i];                             // +
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);               // rotate  bits by 2
+        worker.chunk[i] *= worker.chunk[i];                             // *
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] += worker.chunk[i];                             // +
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8877,10 +8885,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);                // rotate  bits by 1
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);                // rotate  bits by 1
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8889,10 +8897,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);  // rotate  bits by 1
-        worker.step_3[i] = ~worker.step_3[i];               // binary NOT operator
-        worker.step_3[i] = std::rotl(worker.step_3[i], 10); // rotate  bits by 5
-        // worker.step_3[i] = std::rotl(worker.step_3[i], 5); // rotate  bits by 5
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);  // rotate  bits by 1
+        worker.chunk[i] = ~worker.chunk[i];               // binary NOT operator
+        worker.chunk[i] = std::rotl(worker.chunk[i], 10); // rotate  bits by 5
+        // worker.chunk[i] = std::rotl(worker.chunk[i], 5); // rotate  bits by 5
         // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8901,10 +8909,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);   // rotate  bits by 2
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);   // rotate  bits by 2
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);    // rotate  bits by 1
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);   // rotate  bits by 2
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);   // rotate  bits by 2
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);    // rotate  bits by 1
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8913,10 +8921,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);             // rotate  bits by 1
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];          // ones count bits
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);             // rotate  bits by 1
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];          // ones count bits
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8925,10 +8933,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);            // rotate  bits by 4
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);            // rotate  bits by 4
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);            // rotate  bits by 4
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);            // rotate  bits by 4
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8937,10 +8945,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);            // rotate  bits by 4
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                   // XOR and -
-        worker.step_3[i] = reverse8(worker.step_3[i]);                 // reverse bits
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);            // rotate  bits by 4
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                   // XOR and -
+        worker.chunk[i] = reverse8(worker.chunk[i]);                 // reverse bits
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8949,10 +8957,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
-        worker.step_3[i] = reverse8(worker.step_3[i]);                    // reverse bits
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];             // ones count bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
+        worker.chunk[i] = reverse8(worker.chunk[i]);                    // reverse bits
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8961,10 +8969,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];          // ones count bits
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] = ~worker.step_3[i];                          // binary NOT operator
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];          // ones count bits
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] = ~worker.chunk[i];                          // binary NOT operator
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8973,10 +8981,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3); // rotate  bits by 3
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);       // XOR and -
-        worker.step_3[i] += worker.step_3[i];              // +
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3); // rotate  bits by 3
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3); // rotate  bits by 3
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);       // XOR and -
+        worker.chunk[i] += worker.chunk[i];              // +
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3); // rotate  bits by 3
                                                            // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8985,10 +8993,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);                // rotate  bits by 1
-        worker.step_3[i] = reverse8(worker.step_3[i]);                    // reverse bits
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);                // rotate  bits by 1
+        worker.chunk[i] = reverse8(worker.chunk[i]);                    // reverse bits
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -8997,10 +9005,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = reverse8(worker.step_3[i]);        // reverse bits
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);    // rotate  bits by 5
-        worker.step_3[i] += worker.step_3[i];                 // +
+        worker.chunk[i] = reverse8(worker.chunk[i]);        // reverse bits
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);    // rotate  bits by 5
+        worker.chunk[i] += worker.chunk[i];                 // +
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9009,10 +9017,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);                // rotate  bits by 3
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);               // rotate  bits by 2
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);                // rotate  bits by 3
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);               // rotate  bits by 2
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9021,10 +9029,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = reverse8(worker.step_3[i]);      // reverse bits
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4); // rotate  bits by 4
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);  // rotate  bits by 1
-        worker.step_3[i] *= worker.step_3[i];               // *
+        worker.chunk[i] = reverse8(worker.chunk[i]);      // reverse bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4); // rotate  bits by 4
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);  // rotate  bits by 1
+        worker.chunk[i] *= worker.chunk[i];               // *
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9033,10 +9041,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);            // rotate  bits by 2
-        worker.step_3[i] = std::rotl(worker.step_3[i], 6);             // rotate  bits by 5
-        // worker.step_3[i] = std::rotl(worker.step_3[i], 1);             // rotate  bits by 1
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);            // rotate  bits by 2
+        worker.chunk[i] = std::rotl(worker.chunk[i], 6);             // rotate  bits by 5
+        // worker.chunk[i] = std::rotl(worker.chunk[i], 1);             // rotate  bits by 1
         // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9045,10 +9053,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
-        worker.step_3[i] = ~worker.step_3[i];                             // binary NOT operator
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);               // rotate  bits by 2
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
+        worker.chunk[i] = ~worker.chunk[i];                             // binary NOT operator
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);               // rotate  bits by 2
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9057,10 +9065,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] *= worker.step_3[i];                             // *
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);               // rotate  bits by 2
+        worker.chunk[i] *= worker.chunk[i];                             // *
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);               // rotate  bits by 2
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9069,10 +9077,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] += worker.step_3[i];                          // +
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);            // rotate  bits by 2
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);            // rotate  bits by 2
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
+        worker.chunk[i] += worker.chunk[i];                          // +
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);            // rotate  bits by 2
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);            // rotate  bits by 2
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9081,10 +9089,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] *= worker.step_3[i];                          // *
-        worker.step_3[i] = reverse8(worker.step_3[i]);                 // reverse bits
-        worker.step_3[i] *= worker.step_3[i];                          // *
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
+        worker.chunk[i] *= worker.chunk[i];                          // *
+        worker.chunk[i] = reverse8(worker.chunk[i]);                 // reverse bits
+        worker.chunk[i] *= worker.chunk[i];                          // *
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9093,10 +9101,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3); // rotate  bits by 3
-        worker.step_3[i] = ~worker.step_3[i];              // binary NOT operator
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5); // rotate  bits by 5
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);       // XOR and -
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3); // rotate  bits by 3
+        worker.chunk[i] = ~worker.chunk[i];              // binary NOT operator
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5); // rotate  bits by 5
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);       // XOR and -
                                                            // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9105,10 +9113,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 6); // rotate  bits by 5
-        // worker.step_3[i] = std::rotl(worker.step_3[i], 1);                           // rotate  bits by 1
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] = ~worker.step_3[i];                 // binary NOT operator
+        worker.chunk[i] = std::rotl(worker.chunk[i], 6); // rotate  bits by 5
+        // worker.chunk[i] = std::rotl(worker.chunk[i], 1);                           // rotate  bits by 1
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] = ~worker.chunk[i];                 // binary NOT operator
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9117,10 +9125,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);                // rotate  bits by 1
-        worker.step_3[i] = reverse8(worker.step_3[i]);                    // reverse bits
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] = ~worker.step_3[i];                             // binary NOT operator
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);                // rotate  bits by 1
+        worker.chunk[i] = reverse8(worker.chunk[i]);                    // reverse bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] = ~worker.chunk[i];                             // binary NOT operator
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9129,10 +9137,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);                // rotate  bits by 5
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);                // rotate  bits by 3
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);                // rotate  bits by 5
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);                // rotate  bits by 3
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9141,10 +9149,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];             // ones count bits
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9153,10 +9161,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);                // rotate  bits by 3
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);                // rotate  bits by 3
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9165,10 +9173,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] += worker.step_3[i];                          // +
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);             // rotate  bits by 5
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] += worker.chunk[i];                          // +
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);             // rotate  bits by 5
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9177,10 +9185,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = reverse8(worker.step_3[i]);      // reverse bits
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2); // rotate  bits by 2
-        worker.step_3[i] = ~worker.step_3[i];               // binary NOT operator
-        worker.step_3[i] ^= worker.step_3[worker.pos2];     // XOR
+        worker.chunk[i] = reverse8(worker.chunk[i]);      // reverse bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
+        worker.chunk[i] = ~worker.chunk[i];               // binary NOT operator
+        worker.chunk[i] ^= worker.chunk[worker.pos2];     // XOR
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9189,10 +9197,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2); // rotate  bits by 2
-        worker.step_3[i] *= worker.step_3[i];               // *
-        worker.step_3[i] ^= worker.step_3[worker.pos2];     // XOR
-        worker.step_3[i] = reverse8(worker.step_3[i]);      // reverse bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
+        worker.chunk[i] *= worker.chunk[i];               // *
+        worker.chunk[i] ^= worker.chunk[worker.pos2];     // XOR
+        worker.chunk[i] = reverse8(worker.chunk[i]);      // reverse bits
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9201,10 +9209,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] += worker.step_3[i];                          // +
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];          // ones count bits
-        worker.step_3[i] *= worker.step_3[i];                          // *
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] += worker.chunk[i];                          // +
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];          // ones count bits
+        worker.chunk[i] *= worker.chunk[i];                          // *
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9213,10 +9221,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);               // rotate  bits by 4
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);                // rotate  bits by 5
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);               // rotate  bits by 2
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);               // rotate  bits by 4
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);                // rotate  bits by 5
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);               // rotate  bits by 2
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9225,10 +9233,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] = ~worker.step_3[i];                             // binary NOT operator
-        worker.step_3[i] = std::rotl(worker.step_3[i], 6);                // rotate  bits by 3
-        // worker.step_3[i] = std::rotl(worker.step_3[i], 3); // rotate  bits by 3
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] = ~worker.chunk[i];                             // binary NOT operator
+        worker.chunk[i] = std::rotl(worker.chunk[i], 6);                // rotate  bits by 3
+        // worker.chunk[i] = std::rotl(worker.chunk[i], 3); // rotate  bits by 3
         // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9237,10 +9245,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2); // rotate  bits by 2
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2); // rotate  bits by 2
-        worker.step_3[i] ^= worker.step_3[worker.pos2];     // XOR
-        worker.step_3[i] = ~worker.step_3[i];               // binary NOT operator
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
+        worker.chunk[i] ^= worker.chunk[worker.pos2];     // XOR
+        worker.chunk[i] = ~worker.chunk[i];               // binary NOT operator
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9249,10 +9257,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = reverse8(worker.step_3[i]);                 // reverse bits
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);            // rotate  bits by 2
-        worker.step_3[i] += worker.step_3[i];                          // +
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
+        worker.chunk[i] = reverse8(worker.chunk[i]);                 // reverse bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);            // rotate  bits by 2
+        worker.chunk[i] += worker.chunk[i];                          // +
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9261,10 +9269,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 9); // rotate  bits by 3
-        // worker.step_3[i] = std::rotl(worker.step_3[i], 1); // rotate  bits by 1
-        // worker.step_3[i] = std::rotl(worker.step_3[i], 5); // rotate  bits by 5
-        worker.step_3[i] = reverse8(worker.step_3[i]); // reverse bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 9); // rotate  bits by 3
+        // worker.chunk[i] = std::rotl(worker.chunk[i], 1); // rotate  bits by 1
+        // worker.chunk[i] = std::rotl(worker.chunk[i], 5); // rotate  bits by 5
+        worker.chunk[i] = reverse8(worker.chunk[i]); // reverse bits
                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9273,10 +9281,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
-        worker.step_3[i] *= worker.step_3[i];                             // *
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
+        worker.chunk[i] *= worker.chunk[i];                             // *
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9285,10 +9293,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);               // rotate  bits by 2
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);               // rotate  bits by 2
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);                // rotate  bits by 5
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);               // rotate  bits by 2
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);               // rotate  bits by 2
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);                // rotate  bits by 5
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9297,10 +9305,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = ~worker.step_3[i];                          // binary NOT operator
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];          // ones count bits
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];          // ones count bits
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
+        worker.chunk[i] = ~worker.chunk[i];                          // binary NOT operator
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];          // ones count bits
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];          // ones count bits
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9309,10 +9317,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3);    // shift right
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);                // rotate  bits by 1
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);               // rotate  bits by 4
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3);    // shift right
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);                // rotate  bits by 1
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);               // rotate  bits by 4
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9321,10 +9329,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);          // XOR and -
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);    // rotate  bits by 1
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] *= worker.step_3[i];                 // *
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);          // XOR and -
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);    // rotate  bits by 1
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] *= worker.chunk[i];                 // *
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9333,10 +9341,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] = reverse8(worker.step_3[i]);                    // reverse bits
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);                // rotate  bits by 5
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);               // rotate  bits by 2
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] = reverse8(worker.chunk[i]);                    // reverse bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);                // rotate  bits by 5
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);               // rotate  bits by 2
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9345,10 +9353,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                // XOR
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);             // rotate  bits by 5
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);            // rotate  bits by 2
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                // XOR
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);             // rotate  bits by 5
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);            // rotate  bits by 2
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9357,10 +9365,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = ~worker.step_3[i];                             // binary NOT operator
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);               // rotate  bits by 4
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);                // rotate  bits by 1
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
+        worker.chunk[i] = ~worker.chunk[i];                             // binary NOT operator
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);               // rotate  bits by 4
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);                // rotate  bits by 1
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9369,10 +9377,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);            // rotate  bits by 2
-        worker.step_3[i] += worker.step_3[i];                          // +
-        worker.step_3[i] = reverse8(worker.step_3[i]);                 // reverse bits
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);            // rotate  bits by 2
+        worker.chunk[i] += worker.chunk[i];                          // +
+        worker.chunk[i] = reverse8(worker.chunk[i]);                 // reverse bits
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9381,10 +9389,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                   // XOR and -
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                // XOR
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);             // rotate  bits by 5
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                   // XOR and -
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                // XOR
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);             // rotate  bits by 5
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9393,10 +9401,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);                // rotate  bits by 5
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3);    // shift right
-        worker.step_3[i] = reverse8(worker.step_3[i]);                    // reverse bits
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);                // rotate  bits by 5
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3);    // shift right
+        worker.chunk[i] = reverse8(worker.chunk[i]);                    // reverse bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9405,10 +9413,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= worker.step_3[worker.pos2]; // XOR
-        worker.step_3[i] ^= worker.step_3[worker.pos2]; // XOR
-        worker.step_3[i] += worker.step_3[i];           // +
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);    // XOR and -
+        worker.chunk[i] ^= worker.chunk[worker.pos2]; // XOR
+        worker.chunk[i] ^= worker.chunk[worker.pos2]; // XOR
+        worker.chunk[i] += worker.chunk[i];           // +
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);    // XOR and -
                                                         // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9417,10 +9425,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 8); // rotate  bits by 5
-        // worker.step_3[i] = std::rotl(worker.step_3[i], 3);             // rotate  bits by 3
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2); // rotate  bits by 2
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);  // rotate  bits by 3
+        worker.chunk[i] = std::rotl(worker.chunk[i], 8); // rotate  bits by 5
+        // worker.chunk[i] = std::rotl(worker.chunk[i], 3);             // rotate  bits by 3
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);  // rotate  bits by 3
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9429,10 +9437,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);  // rotate  bits by 1
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2); // rotate  bits by 2
-        worker.step_3[i] ^= worker.step_3[worker.pos2];     // XOR
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);  // rotate  bits by 5
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);  // rotate  bits by 1
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
+        worker.chunk[i] ^= worker.chunk[worker.pos2];     // XOR
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);  // rotate  bits by 5
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9441,10 +9449,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);    // rotate  bits by 1
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);          // XOR and -
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] += worker.step_3[i];                 // +
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);    // rotate  bits by 1
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);          // XOR and -
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] += worker.chunk[i];                 // +
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9453,10 +9461,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);                // rotate  bits by 5
-        worker.step_3[i] = reverse8(worker.step_3[i]);                    // reverse bits
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);               // rotate  bits by 2
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);                // rotate  bits by 5
+        worker.chunk[i] = reverse8(worker.chunk[i]);                    // reverse bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);               // rotate  bits by 2
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9465,10 +9473,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);                // rotate  bits by 3
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3);    // shift right
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);                // rotate  bits by 3
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3);    // shift right
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9477,10 +9485,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
-        worker.step_3[i] = ~worker.step_3[i];                             // binary NOT operator
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
+        worker.chunk[i] = ~worker.chunk[i];                             // binary NOT operator
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9489,10 +9497,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = reverse8(worker.step_3[i]);      // reverse bits
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4); // rotate  bits by 4
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2); // rotate  bits by 2
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4); // rotate  bits by 4
+        worker.chunk[i] = reverse8(worker.chunk[i]);      // reverse bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4); // rotate  bits by 4
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4); // rotate  bits by 4
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9501,10 +9509,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];             // ones count bits
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9513,10 +9521,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = ~worker.step_3[i];                          // binary NOT operator
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);            // rotate  bits by 4
-        worker.step_3[i] *= worker.step_3[i];                          // *
+        worker.chunk[i] = ~worker.chunk[i];                          // binary NOT operator
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);            // rotate  bits by 4
+        worker.chunk[i] *= worker.chunk[i];                          // *
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9525,10 +9533,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);                // rotate  bits by 5
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                      // XOR and -
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);                // rotate  bits by 5
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                      // XOR and -
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9537,10 +9545,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= worker.step_3[worker.pos2]; // XOR
-        worker.step_3[i] = reverse8(worker.step_3[i]);  // reverse bits
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);    // XOR and -
-        worker.step_3[i] += worker.step_3[i];           // +
+        worker.chunk[i] ^= worker.chunk[worker.pos2]; // XOR
+        worker.chunk[i] = reverse8(worker.chunk[i]);  // reverse bits
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);    // XOR and -
+        worker.chunk[i] += worker.chunk[i];           // +
                                                         // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9549,10 +9557,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9561,10 +9569,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] += worker.step_3[i];                          // +
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] *= worker.step_3[i];                          // *
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
+        worker.chunk[i] += worker.chunk[i];                          // +
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] *= worker.chunk[i];                          // *
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9573,43 +9581,34 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] = ~worker.step_3[i];                          // binary NOT operator
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);            // rotate  bits by 2
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] = ~worker.chunk[i];                          // binary NOT operator
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);            // rotate  bits by 2
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
     case 153:
 #pragma GCC unroll 32
-/*
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 4); // rotate  bits by 1
-        // worker.step_3[i] = std::rotl(worker.step_3[i], 3); // rotate  bits by 3
-        // worker.step_3[i] = ~worker.step_3[i];     // binary NOT operator
-        // worker.step_3[i] = ~worker.step_3[i];     // binary NOT operator
+        worker.chunk[i] = std::rotl(worker.chunk[i], 4); // rotate  bits by 1
+        // worker.chunk[i] = std::rotl(worker.chunk[i], 3); // rotate  bits by 3
+        // worker.chunk[i] = ~worker.chunk[i];     // binary NOT operator
+        // worker.chunk[i] = ~worker.chunk[i];     // binary NOT operator
         // INSERT_RANDOM_CODE_END
       }
-      */
-    for (int i = worker.pos1; i < worker.pos2; i++) {
-        // INSERT_RANDOM_CODE_START
-        uint8x16_t input = vld1q_u8(&worker.step_3[i]); // Load 16 bytes from step_3 starting at position i
-        uint8x16_t rotated = vextq_u8(input, input, 12); // Rotate left by 4 bits (equivalent to std::rotl with shift of 4)
-        vst1q_u8(&worker.step_3[i], rotated); // Store the rotated bytes back into step_3
-        // INSERT_RANDOM_CODE_END
-    }
       break;
     case 154:
 #pragma GCC unroll 32
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);    // rotate  bits by 5
-        worker.step_3[i] = ~worker.step_3[i];                 // binary NOT operator
-        worker.step_3[i] ^= worker.step_3[worker.pos2];       // XOR
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);    // rotate  bits by 5
+        worker.chunk[i] = ~worker.chunk[i];                 // binary NOT operator
+        worker.chunk[i] ^= worker.chunk[worker.pos2];       // XOR
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9618,10 +9617,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);          // XOR and -
-        worker.step_3[i] ^= worker.step_3[worker.pos2];       // XOR
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] ^= worker.step_3[worker.pos2];       // XOR
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);          // XOR and -
+        worker.chunk[i] ^= worker.chunk[worker.pos2];       // XOR
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] ^= worker.chunk[worker.pos2];       // XOR
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9630,10 +9629,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] = std::rotl(worker.step_3[i], 4);             // rotate  bits by 3
-        // worker.step_3[i] = std::rotl(worker.step_3[i], 1);    // rotate  bits by 1
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] = std::rotl(worker.chunk[i], 4);             // rotate  bits by 3
+        // worker.chunk[i] = std::rotl(worker.chunk[i], 1);    // rotate  bits by 1
         // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9642,10 +9641,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3);    // shift right
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);                // rotate  bits by 1
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3);    // shift right
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);                // rotate  bits by 1
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9654,10 +9653,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);    // rotate  bits by 3
-        worker.step_3[i] += worker.step_3[i];                 // +
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);    // rotate  bits by 1
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);    // rotate  bits by 3
+        worker.chunk[i] += worker.chunk[i];                 // +
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);    // rotate  bits by 1
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9666,10 +9665,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                      // XOR and -
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                      // XOR and -
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9678,10 +9677,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] = reverse8(worker.step_3[i]);                 // reverse bits
-        worker.step_3[i] = std::rotl(worker.step_3[i], 4);             // rotate  bits by 1
-        // worker.step_3[i] = std::rotl(worker.step_3[i], 3);    // rotate  bits by 3
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] = reverse8(worker.chunk[i]);                 // reverse bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 4);             // rotate  bits by 1
+        // worker.chunk[i] = std::rotl(worker.chunk[i], 3);    // rotate  bits by 3
         // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9690,10 +9689,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);                // rotate  bits by 5
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);                // rotate  bits by 5
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9702,10 +9701,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] *= worker.step_3[i];               // *
-        worker.step_3[i] = reverse8(worker.step_3[i]);      // reverse bits
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2); // rotate  bits by 2
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);        // XOR and -
+        worker.chunk[i] *= worker.chunk[i];               // *
+        worker.chunk[i] = reverse8(worker.chunk[i]);      // reverse bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);        // XOR and -
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9714,10 +9713,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                   // XOR and -
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);            // rotate  bits by 4
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);             // rotate  bits by 1
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                   // XOR and -
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);            // rotate  bits by 4
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);             // rotate  bits by 1
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9726,10 +9725,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] *= worker.step_3[i];                 // *
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);          // XOR and -
-        worker.step_3[i] = ~worker.step_3[i];                 // binary NOT operator
+        worker.chunk[i] *= worker.chunk[i];                 // *
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);          // XOR and -
+        worker.chunk[i] = ~worker.chunk[i];                 // binary NOT operator
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9738,10 +9737,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);            // rotate  bits by 4
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                // XOR
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] += worker.step_3[i];                          // +
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);            // rotate  bits by 4
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                // XOR
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] += worker.chunk[i];                          // +
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9750,10 +9749,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);  // rotate  bits by 3
-        worker.step_3[i] += worker.step_3[i];               // +
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2); // rotate  bits by 2
-        worker.step_3[i] = ~worker.step_3[i];               // binary NOT operator
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);  // rotate  bits by 3
+        worker.chunk[i] += worker.chunk[i];               // +
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
+        worker.chunk[i] = ~worker.chunk[i];               // binary NOT operator
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9762,10 +9761,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        // worker.step_3[i] = ~worker.step_3[i];        // binary NOT operator
-        // worker.step_3[i] = ~worker.step_3[i];        // binary NOT operator
-        worker.step_3[i] *= worker.step_3[i];                          // *
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
+        // worker.chunk[i] = ~worker.chunk[i];        // binary NOT operator
+        // worker.chunk[i] = ~worker.chunk[i];        // binary NOT operator
+        worker.chunk[i] *= worker.chunk[i];                          // *
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9774,10 +9773,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);                // rotate  bits by 1
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);                // rotate  bits by 1
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9786,10 +9785,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);                // rotate  bits by 1
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);               // rotate  bits by 4
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);                // rotate  bits by 1
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);               // rotate  bits by 4
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9798,10 +9797,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);   // XOR and -
-        worker.step_3[i] = reverse8(worker.step_3[i]); // reverse bits
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);   // XOR and -
-        worker.step_3[i] *= worker.step_3[i];          // *
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);   // XOR and -
+        worker.chunk[i] = reverse8(worker.chunk[i]); // reverse bits
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);   // XOR and -
+        worker.chunk[i] *= worker.chunk[i];          // *
                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9810,10 +9809,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);    // rotate  bits by 3
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);          // XOR and -
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] = reverse8(worker.step_3[i]);        // reverse bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);    // rotate  bits by 3
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);          // XOR and -
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] = reverse8(worker.chunk[i]);        // reverse bits
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9822,10 +9821,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);            // rotate  bits by 4
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                   // XOR and -
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);             // rotate  bits by 1
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);            // rotate  bits by 4
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                   // XOR and -
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);             // rotate  bits by 1
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9834,10 +9833,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = ~worker.step_3[i];                          // binary NOT operator
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] *= worker.step_3[i];                          // *
-        worker.step_3[i] += worker.step_3[i];                          // +
+        worker.chunk[i] = ~worker.chunk[i];                          // binary NOT operator
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] *= worker.chunk[i];                          // *
+        worker.chunk[i] += worker.chunk[i];                          // +
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9846,10 +9845,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = ~worker.step_3[i];                             // binary NOT operator
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];             // ones count bits
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];             // ones count bits
+        worker.chunk[i] = ~worker.chunk[i];                             // binary NOT operator
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9858,10 +9857,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3); // rotate  bits by 3
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);       // XOR and -
-        worker.step_3[i] *= worker.step_3[i];              // *
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5); // rotate  bits by 5
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3); // rotate  bits by 3
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);       // XOR and -
+        worker.chunk[i] *= worker.chunk[i];              // *
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5); // rotate  bits by 5
                                                            // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9870,10 +9869,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= worker.step_3[worker.pos2];    // XOR
-        worker.step_3[i] *= worker.step_3[i];              // *
-        worker.step_3[i] ^= worker.step_3[worker.pos2];    // XOR
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5); // rotate  bits by 5
+        worker.chunk[i] ^= worker.chunk[worker.pos2];    // XOR
+        worker.chunk[i] *= worker.chunk[i];              // *
+        worker.chunk[i] ^= worker.chunk[worker.pos2];    // XOR
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5); // rotate  bits by 5
                                                            // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9882,10 +9881,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];             // ones count bits
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);               // rotate  bits by 2
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);               // rotate  bits by 2
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);               // rotate  bits by 2
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);               // rotate  bits by 2
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9894,10 +9893,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] += worker.step_3[i];                             // +
-        worker.step_3[i] = ~worker.step_3[i];                             // binary NOT operator
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);                // rotate  bits by 1
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] += worker.chunk[i];                             // +
+        worker.chunk[i] = ~worker.chunk[i];                             // binary NOT operator
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);                // rotate  bits by 1
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9906,10 +9905,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);            // rotate  bits by 2
-        worker.step_3[i] += worker.step_3[i];                          // +
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] = reverse8(worker.step_3[i]);                 // reverse bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);            // rotate  bits by 2
+        worker.chunk[i] += worker.chunk[i];                          // +
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] = reverse8(worker.chunk[i]);                 // reverse bits
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9918,10 +9917,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);            // rotate  bits by 4
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                // XOR
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                   // XOR and -
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);            // rotate  bits by 4
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                // XOR
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                   // XOR and -
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9930,10 +9929,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = ~worker.step_3[i];                          // binary NOT operator
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);            // rotate  bits by 2
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);             // rotate  bits by 5
+        worker.chunk[i] = ~worker.chunk[i];                          // binary NOT operator
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);            // rotate  bits by 2
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);             // rotate  bits by 5
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9942,10 +9941,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= worker.step_3[worker.pos2];    // XOR
-        worker.step_3[i] = std::rotl(worker.step_3[i], 6); // rotate  bits by 1
-        // worker.step_3[i] = std::rotl(worker.step_3[i], 5);         // rotate  bits by 5
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4); // rotate  bits by 4
+        worker.chunk[i] ^= worker.chunk[worker.pos2];    // XOR
+        worker.chunk[i] = std::rotl(worker.chunk[i], 6); // rotate  bits by 1
+        // worker.chunk[i] = std::rotl(worker.chunk[i], 5);         // rotate  bits by 5
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4); // rotate  bits by 4
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9954,10 +9953,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] += worker.step_3[i];        // +
-        worker.step_3[i] -= (worker.step_3[i] ^ 97); // XOR and -
-        worker.step_3[i] -= (worker.step_3[i] ^ 97); // XOR and -
-        worker.step_3[i] *= worker.step_3[i];        // *
+        worker.chunk[i] += worker.chunk[i];        // +
+        worker.chunk[i] -= (worker.chunk[i] ^ 97); // XOR and -
+        worker.chunk[i] -= (worker.chunk[i] ^ 97); // XOR and -
+        worker.chunk[i] *= worker.chunk[i];        // *
                                                      // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9966,10 +9965,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] *= worker.step_3[i];                          // *
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);             // rotate  bits by 5
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                // XOR
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] *= worker.chunk[i];                          // *
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);             // rotate  bits by 5
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                // XOR
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9978,10 +9977,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = ~worker.step_3[i];                          // binary NOT operator
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);            // rotate  bits by 4
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);             // rotate  bits by 5
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
+        worker.chunk[i] = ~worker.chunk[i];                          // binary NOT operator
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);            // rotate  bits by 4
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);             // rotate  bits by 5
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -9990,10 +9989,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);            // rotate  bits by 2
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);            // rotate  bits by 4
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                   // XOR and -
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);            // rotate  bits by 2
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);            // rotate  bits by 4
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                   // XOR and -
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10002,10 +10001,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= worker.step_3[worker.pos2];    // XOR
-        worker.step_3[i] = ~worker.step_3[i];              // binary NOT operator
-        worker.step_3[i] += worker.step_3[i];              // +
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3); // rotate  bits by 3
+        worker.chunk[i] ^= worker.chunk[worker.pos2];    // XOR
+        worker.chunk[i] = ~worker.chunk[i];              // binary NOT operator
+        worker.chunk[i] += worker.chunk[i];              // +
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3); // rotate  bits by 3
                                                            // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10014,10 +10013,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);   // rotate  bits by 4
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);   // rotate  bits by 4
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);   // rotate  bits by 4
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);   // rotate  bits by 4
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);   // rotate  bits by 4
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);   // rotate  bits by 4
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10026,10 +10025,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);  // rotate  bits by 5
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4); // rotate  bits by 4
-        worker.step_3[i] ^= worker.step_3[worker.pos2];     // XOR
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);        // XOR and -
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);  // rotate  bits by 5
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4); // rotate  bits by 4
+        worker.chunk[i] ^= worker.chunk[worker.pos2];     // XOR
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);        // XOR and -
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10038,10 +10037,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);                // rotate  bits by 5
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3);    // shift right
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);               // rotate  bits by 2
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);                // rotate  bits by 5
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3);    // shift right
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);               // rotate  bits by 2
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10050,10 +10049,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] += worker.step_3[i];                             // +
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);                // rotate  bits by 3
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3);    // shift right
+        worker.chunk[i] += worker.chunk[i];                             // +
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);                // rotate  bits by 3
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3);    // shift right
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10062,10 +10061,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] += worker.step_3[i];                          // +
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] += worker.step_3[i];                          // +
-        worker.step_3[i] *= worker.step_3[i];                          // *
+        worker.chunk[i] += worker.chunk[i];                          // +
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] += worker.chunk[i];                          // +
+        worker.chunk[i] *= worker.chunk[i];                          // *
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10074,10 +10073,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);                // rotate  bits by 1
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);                // rotate  bits by 1
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10086,10 +10085,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10098,10 +10097,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);   // rotate  bits by 2
-        worker.step_3[i] ^= worker.step_3[worker.pos2];       // XOR
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);   // rotate  bits by 4
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);   // rotate  bits by 2
+        worker.chunk[i] ^= worker.chunk[worker.pos2];       // XOR
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);   // rotate  bits by 4
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10110,10 +10109,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);             // rotate  bits by 3
-        worker.step_3[i] = reverse8(worker.step_3[i]);                 // reverse bits
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);             // rotate  bits by 1
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);             // rotate  bits by 3
+        worker.chunk[i] = reverse8(worker.chunk[i]);                 // reverse bits
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);             // rotate  bits by 1
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10122,10 +10121,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);               // rotate  bits by 4
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] *= worker.step_3[i];                             // *
-        worker.step_3[i] *= worker.step_3[i];                             // *
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);               // rotate  bits by 4
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] *= worker.chunk[i];                             // *
+        worker.chunk[i] *= worker.chunk[i];                             // *
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10134,10 +10133,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] = reverse8(worker.step_3[i]);                 // reverse bits
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);             // rotate  bits by 1
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] = reverse8(worker.chunk[i]);                 // reverse bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);             // rotate  bits by 1
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10146,10 +10145,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = ~worker.step_3[i];           // binary NOT operator
-        worker.step_3[i] += worker.step_3[i];           // +
-        worker.step_3[i] *= worker.step_3[i];           // *
-        worker.step_3[i] ^= worker.step_3[worker.pos2]; // XOR
+        worker.chunk[i] = ~worker.chunk[i];           // binary NOT operator
+        worker.chunk[i] += worker.chunk[i];           // +
+        worker.chunk[i] *= worker.chunk[i];           // *
+        worker.chunk[i] ^= worker.chunk[worker.pos2]; // XOR
                                                         // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10158,10 +10157,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];          // ones count bits
-        worker.step_3[i] = reverse8(worker.step_3[i]);                 // reverse bits
-        worker.step_3[i] = reverse8(worker.step_3[i]);                 // reverse bits
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];          // ones count bits
+        worker.chunk[i] = reverse8(worker.chunk[i]);                 // reverse bits
+        worker.chunk[i] = reverse8(worker.chunk[i]);                 // reverse bits
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10170,10 +10169,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);  // rotate  bits by 3
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2); // rotate  bits by 2
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4); // rotate  bits by 4
-        worker.step_3[i] = ~worker.step_3[i];               // binary NOT operator
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);  // rotate  bits by 3
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4); // rotate  bits by 4
+        worker.chunk[i] = ~worker.chunk[i];               // binary NOT operator
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10182,10 +10181,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
-        worker.step_3[i] = ~worker.step_3[i];                             // binary NOT operator
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);                // rotate  bits by 5
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
+        worker.chunk[i] = ~worker.chunk[i];                             // binary NOT operator
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);                // rotate  bits by 5
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10194,10 +10193,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);                // rotate  bits by 1
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);                // rotate  bits by 1
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10206,10 +10205,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);                // rotate  bits by 5
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);               // rotate  bits by 2
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);                // rotate  bits by 5
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);               // rotate  bits by 2
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10218,10 +10217,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];          // ones count bits
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);            // rotate  bits by 4
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] += worker.step_3[i];                          // +
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];          // ones count bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);            // rotate  bits by 4
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] += worker.chunk[i];                          // +
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10230,10 +10229,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);   // rotate  bits by 4
-        worker.step_3[i] = reverse8(worker.step_3[i]);        // reverse bits
-        worker.step_3[i] = reverse8(worker.step_3[i]);        // reverse bits
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);   // rotate  bits by 4
+        worker.chunk[i] = reverse8(worker.chunk[i]);        // reverse bits
+        worker.chunk[i] = reverse8(worker.chunk[i]);        // reverse bits
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10242,10 +10241,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 8); // rotate  bits by 5
-        // worker.step_3[i] = std::rotl(worker.step_3[i], 3);                           // rotate  bits by 3
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 8); // rotate  bits by 5
+        // worker.chunk[i] = std::rotl(worker.chunk[i], 3);                           // rotate  bits by 3
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10254,10 +10253,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] += worker.step_3[i];                          // +
-        worker.step_3[i] += worker.step_3[i];                          // +
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);             // rotate  bits by 3
+        worker.chunk[i] += worker.chunk[i];                          // +
+        worker.chunk[i] += worker.chunk[i];                          // +
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);             // rotate  bits by 3
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10266,10 +10265,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);    // rotate  bits by 5
-        worker.step_3[i] = reverse8(worker.step_3[i]);        // reverse bits
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);          // XOR and -
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);    // rotate  bits by 5
+        worker.chunk[i] = reverse8(worker.chunk[i]);        // reverse bits
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);          // XOR and -
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10278,10 +10277,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);               // rotate  bits by 2
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);                // rotate  bits by 5
-        worker.step_3[i] = ~worker.step_3[i];                             // binary NOT operator
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);               // rotate  bits by 2
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);                // rotate  bits by 5
+        worker.chunk[i] = ~worker.chunk[i];                             // binary NOT operator
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10290,10 +10289,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);               // rotate  bits by 4
-        worker.step_3[i] += worker.step_3[i];                             // +
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                      // XOR and -
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);               // rotate  bits by 4
+        worker.chunk[i] += worker.chunk[i];                             // +
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                      // XOR and -
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10302,10 +10301,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);               // rotate  bits by 2
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);               // rotate  bits by 2
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10314,10 +10313,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] += worker.step_3[i];                          // +
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);             // rotate  bits by 3
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                   // XOR and -
+        worker.chunk[i] += worker.chunk[i];                          // +
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);             // rotate  bits by 3
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                   // XOR and -
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10326,10 +10325,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                // XOR
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                   // XOR and -
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] = ~worker.step_3[i];                          // binary NOT operator
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                // XOR
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                   // XOR and -
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] = ~worker.chunk[i];                          // binary NOT operator
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10338,10 +10337,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
-        worker.step_3[i] *= worker.step_3[i];                             // *
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
+        worker.chunk[i] *= worker.chunk[i];                             // *
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10350,10 +10349,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] = ~worker.step_3[i];                             // binary NOT operator
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                      // XOR and -
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] = ~worker.chunk[i];                             // binary NOT operator
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                      // XOR and -
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10362,10 +10361,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);  // rotate  bits by 5
-        worker.step_3[i] += worker.step_3[i];               // +
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);  // rotate  bits by 1
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4); // rotate  bits by 4
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);  // rotate  bits by 5
+        worker.chunk[i] += worker.chunk[i];               // +
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);  // rotate  bits by 1
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4); // rotate  bits by 4
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10374,10 +10373,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = reverse8(worker.step_3[i]); // reverse bits
-        worker.step_3[i] = ~worker.step_3[i];          // binary NOT operator
-        worker.step_3[i] *= worker.step_3[i];          // *
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);   // XOR and -
+        worker.chunk[i] = reverse8(worker.chunk[i]); // reverse bits
+        worker.chunk[i] = ~worker.chunk[i];          // binary NOT operator
+        worker.chunk[i] *= worker.chunk[i];          // *
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);   // XOR and -
                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10386,10 +10385,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);               // rotate  bits by 4
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);                // rotate  bits by 3
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] = reverse8(worker.step_3[i]);                    // reverse bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);               // rotate  bits by 4
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);                // rotate  bits by 3
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] = reverse8(worker.chunk[i]);                    // reverse bits
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10398,10 +10397,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);             // rotate  bits by 1
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] = reverse8(worker.step_3[i]);                 // reverse bits
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);             // rotate  bits by 1
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] = reverse8(worker.chunk[i]);                 // reverse bits
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10410,10 +10409,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5); // rotate  bits by 5
-        worker.step_3[i] ^= worker.step_3[worker.pos2];    // XOR
-        worker.step_3[i] = ~worker.step_3[i];              // binary NOT operator
-        worker.step_3[i] = reverse8(worker.step_3[i]);     // reverse bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5); // rotate  bits by 5
+        worker.chunk[i] ^= worker.chunk[worker.pos2];    // XOR
+        worker.chunk[i] = ~worker.chunk[i];              // binary NOT operator
+        worker.chunk[i] = reverse8(worker.chunk[i]);     // reverse bits
                                                            // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10422,10 +10421,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                // XOR
-        worker.step_3[i] *= worker.step_3[i];                          // *
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                // XOR
+        worker.chunk[i] *= worker.chunk[i];                          // *
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10434,10 +10433,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);                // rotate  bits by 3
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                      // XOR and -
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);                // rotate  bits by 3
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                      // XOR and -
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10445,24 +10444,20 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
 #pragma GCC unroll 32
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
-        // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2); // rotate  bits by 2
-        worker.step_3[i] = std::rotl(worker.step_3[i], 4);  // rotate  bits by 1
-        // worker.step_3[i] = std::rotl(worker.step_3[i], 3);             // rotate  bits by 3
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-                                                                       //
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
+        worker.chunk[i] = std::rotl(worker.chunk[i], 4);  // rotate  bits by 1
+        // worker.chunk[i] = std::rotl(worker.chunk[i], 3);             // rotate  bits by 3
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
       }
       break;
     case 225:
 #pragma GCC unroll 32
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
-        // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = ~worker.step_3[i];                          // binary NOT operator
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] = reverse8(worker.step_3[i]);                 // reverse bits
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);             // rotate  bits by 3
-                                                                       // INSERT_RANDOM_CODE_END
+        worker.chunk[i] = ~worker.chunk[i];                          // binary NOT operator
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] = reverse8(worker.chunk[i]);                 // reverse bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);             // rotate  bits by 3
       }
       break;
     case 226:
@@ -10470,10 +10465,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = reverse8(worker.step_3[i]);  // reverse bits
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);    // XOR and -
-        worker.step_3[i] *= worker.step_3[i];           // *
-        worker.step_3[i] ^= worker.step_3[worker.pos2]; // XOR
+        worker.chunk[i] = reverse8(worker.chunk[i]);  // reverse bits
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);    // XOR and -
+        worker.chunk[i] *= worker.chunk[i];           // *
+        worker.chunk[i] ^= worker.chunk[worker.pos2]; // XOR
                                                         // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10482,10 +10477,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = ~worker.step_3[i];                             // binary NOT operator
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                      // XOR and -
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
+        worker.chunk[i] = ~worker.chunk[i];                             // binary NOT operator
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                      // XOR and -
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10494,10 +10489,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] += worker.step_3[i];                          // +
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] += worker.step_3[i];                          // +
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];          // ones count bits
+        worker.chunk[i] += worker.chunk[i];                          // +
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] += worker.chunk[i];                          // +
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];          // ones count bits
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10506,10 +10501,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);                // rotate  bits by 3
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);               // rotate  bits by 2
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];             // ones count bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);                // rotate  bits by 3
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);               // rotate  bits by 2
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10518,10 +10513,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] *= worker.step_3[i];                             // *
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
+        worker.chunk[i] *= worker.chunk[i];                             // *
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10530,10 +10525,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);             // rotate  bits by 3
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                // XOR
-        worker.step_3[i] = reverse8(worker.step_3[i]);                 // reverse bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);             // rotate  bits by 3
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                // XOR
+        worker.chunk[i] = reverse8(worker.chunk[i]);                 // reverse bits
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10542,10 +10537,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] *= worker.step_3[i];               // *
-        worker.step_3[i] *= worker.step_3[i];               // *
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4); // rotate  bits by 4
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);  // rotate  bits by 5
+        worker.chunk[i] *= worker.chunk[i];               // *
+        worker.chunk[i] *= worker.chunk[i];               // *
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4); // rotate  bits by 4
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);  // rotate  bits by 5
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10554,10 +10549,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);    // rotate  bits by 1
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);    // rotate  bits by 3
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);    // rotate  bits by 1
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);    // rotate  bits by 3
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10566,10 +10561,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] *= worker.step_3[i];                             // *
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3);    // shift right
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] *= worker.chunk[i];                             // *
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3);    // shift right
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10578,10 +10573,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2); // rotate  bits by 2
-        worker.step_3[i] *= worker.step_3[i];               // *
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);  // rotate  bits by 3
-        worker.step_3[i] = ~worker.step_3[i];               // binary NOT operator
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
+        worker.chunk[i] *= worker.chunk[i];               // *
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);  // rotate  bits by 3
+        worker.chunk[i] = ~worker.chunk[i];               // binary NOT operator
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10590,10 +10585,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= worker.step_3[worker.pos2];                   // XOR
-        worker.step_3[i] += worker.step_3[i];                             // +
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                      // XOR and -
+        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
+        worker.chunk[i] += worker.chunk[i];                             // +
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                      // XOR and -
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10602,10 +10597,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);             // rotate  bits by 5
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);            // rotate  bits by 2
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);             // rotate  bits by 3
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);             // rotate  bits by 5
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);            // rotate  bits by 2
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);             // rotate  bits by 3
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10614,10 +10609,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] += worker.step_3[i];              // +
-        worker.step_3[i] += worker.step_3[i];              // +
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3); // rotate  bits by 3
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);       // XOR and -
+        worker.chunk[i] += worker.chunk[i];              // +
+        worker.chunk[i] += worker.chunk[i];              // +
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3); // rotate  bits by 3
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);       // XOR and -
                                                            // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10626,10 +10621,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 6); // rotate  bits by 5
-        // worker.step_3[i] = std::rotl(worker.step_3[i], 1); // rotate  bits by 1
-        worker.step_3[i] *= worker.step_3[i];                             // *
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
+        worker.chunk[i] = std::rotl(worker.chunk[i], 6); // rotate  bits by 5
+        // worker.chunk[i] = std::rotl(worker.chunk[i], 1); // rotate  bits by 1
+        worker.chunk[i] *= worker.chunk[i];                             // *
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10638,10 +10633,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = ~worker.step_3[i];                             // binary NOT operator
-        worker.step_3[i] += worker.step_3[i];                             // +
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3);    // shift left
+        worker.chunk[i] = ~worker.chunk[i];                             // binary NOT operator
+        worker.chunk[i] += worker.chunk[i];                             // +
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3);    // shift left
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10650,10 +10645,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);   // rotate  bits by 4
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] ^= worker.step_3[worker.pos2];       // XOR
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);    // rotate  bits by 1
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);   // rotate  bits by 4
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] ^= worker.chunk[worker.pos2];       // XOR
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);    // rotate  bits by 1
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10662,10 +10657,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] += worker.step_3[i];           // +
-        worker.step_3[i] += worker.step_3[i];           // +
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);    // XOR and -
-        worker.step_3[i] ^= worker.step_3[worker.pos2]; // XOR
+        worker.chunk[i] += worker.chunk[i];           // +
+        worker.chunk[i] += worker.chunk[i];           // +
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);    // XOR and -
+        worker.chunk[i] ^= worker.chunk[worker.pos2]; // XOR
                                                         // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10674,10 +10669,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);    // rotate  bits by 5
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);   // rotate  bits by 2
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);    // rotate  bits by 1
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);    // rotate  bits by 5
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);   // rotate  bits by 2
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);    // rotate  bits by 1
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10686,10 +10681,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = ~worker.step_3[i];               // binary NOT operator
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2); // rotate  bits by 2
-        worker.step_3[i] = reverse8(worker.step_3[i]);      // reverse bits
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);  // rotate  bits by 5
+        worker.chunk[i] = ~worker.chunk[i];               // binary NOT operator
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
+        worker.chunk[i] = reverse8(worker.chunk[i]);      // reverse bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);  // rotate  bits by 5
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10698,10 +10693,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);                   // XOR and -
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);             // rotate  bits by 5
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);            // rotate  bits by 2
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);                   // XOR and -
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);             // rotate  bits by 5
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);            // rotate  bits by 2
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10710,10 +10705,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] += worker.step_3[i];                          // +
-        worker.step_3[i] = std::rotl(worker.step_3[i], 1);             // rotate  bits by 1
-        worker.step_3[i] = worker.step_3[i] >> (worker.step_3[i] & 3); // shift right
-        worker.step_3[i] += worker.step_3[i];                          // +
+        worker.chunk[i] += worker.chunk[i];                          // +
+        worker.chunk[i] = std::rotl(worker.chunk[i], 1);             // rotate  bits by 1
+        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3); // shift right
+        worker.chunk[i] += worker.chunk[i];                          // +
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10722,10 +10717,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);  // rotate  bits by 5
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2); // rotate  bits by 2
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);  // rotate  bits by 5
-        worker.step_3[i] = ~worker.step_3[i];               // binary NOT operator
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);  // rotate  bits by 5
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);  // rotate  bits by 5
+        worker.chunk[i] = ~worker.chunk[i];               // binary NOT operator
                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10734,10 +10729,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = ~worker.step_3[i];                 // binary NOT operator
-        worker.step_3[i] -= (worker.step_3[i] ^ 97);          // XOR and -
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] = std::rotl(worker.step_3[i], 5);    // rotate  bits by 5
+        worker.chunk[i] = ~worker.chunk[i];                 // binary NOT operator
+        worker.chunk[i] -= (worker.chunk[i] ^ 97);          // XOR and -
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 5);    // rotate  bits by 5
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10746,10 +10741,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = reverse8(worker.step_3[i]);                    // reverse bits
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);               // rotate  bits by 4
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);               // rotate  bits by 4
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
+        worker.chunk[i] = reverse8(worker.chunk[i]);                    // reverse bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);               // rotate  bits by 4
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);               // rotate  bits by 4
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10758,10 +10753,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = worker.step_3[i] & worker.step_3[worker.pos2]; // AND
-        worker.step_3[i] = std::rotl(worker.step_3[i], worker.step_3[i]); // rotate  bits by random
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]];             // ones count bits
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);               // rotate  bits by 4
+        worker.chunk[i] = worker.chunk[i] & worker.chunk[worker.pos2]; // AND
+        worker.chunk[i] = std::rotl(worker.chunk[i], worker.chunk[i]); // rotate  bits by random
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);               // rotate  bits by 4
                                                                           // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10770,10 +10765,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] += worker.step_3[i];                 // +
-        worker.step_3[i] ^= (byte)bitTable[worker.step_3[i]]; // ones count bits
-        worker.step_3[i] = reverse8(worker.step_3[i]);        // reverse bits
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);   // rotate  bits by 2
+        worker.chunk[i] += worker.chunk[i];                 // +
+        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
+        worker.chunk[i] = reverse8(worker.chunk[i]);        // reverse bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);   // rotate  bits by 2
                                                               // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10782,10 +10777,10 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = reverse8(worker.step_3[i]);                 // reverse bits
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 4);            // rotate  bits by 4
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);            // rotate  bits by 2
-        worker.step_3[i] = worker.step_3[i] << (worker.step_3[i] & 3); // shift left
+        worker.chunk[i] = reverse8(worker.chunk[i]);                 // reverse bits
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 4);            // rotate  bits by 4
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);            // rotate  bits by 2
+        worker.chunk[i] = worker.chunk[i] << (worker.chunk[i] & 3); // shift left
                                                                        // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10794,28 +10789,28 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);  // rotate  bits by 3
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2); // rotate  bits by 2
-        worker.step_3[i] ^= worker.step_3[worker.pos2];     // XOR
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);  // rotate  bits by 3
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);  // rotate  bits by 3
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2); // rotate  bits by 2
+        worker.chunk[i] ^= worker.chunk[worker.pos2];     // XOR
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);  // rotate  bits by 3
         // INSERT_RANDOM_CODE_END
 
         worker.prev_lhash = worker.lhash + worker.prev_lhash;
-        worker.lhash = XXHash64::hash(worker.step_3, worker.pos2,0);
+        worker.lhash = XXHash64::hash(worker.chunk, worker.pos2,0);
       }
       break;
     case 254:
     case 255:
-      RC4_set_key(&worker.key, 256,  worker.step_3);
-// worker.step_3 = highwayhash.Sum(worker.step_3[:], worker.step_3[:])
+      RC4_set_key(&worker.key, 256,  worker.chunk);
+// worker.chunk = highwayhash.Sum(worker.chunk[:], worker.chunk[:])
 #pragma GCC unroll 32
       for (int i = worker.pos1; i < worker.pos2; i++)
       {
         // INSERT_RANDOM_CODE_START
-        worker.step_3[i] ^= static_cast<uint8_t>(std::bitset<8>(worker.step_3[i]).count()); // ones count bits
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);                                  // rotate  bits by 3
-        worker.step_3[i] ^= std::rotl(worker.step_3[i], 2);                                 // rotate  bits by 2
-        worker.step_3[i] = std::rotl(worker.step_3[i], 3);                                  // rotate  bits by 3
+        worker.chunk[i] ^= static_cast<uint8_t>(std::bitset<8>(worker.chunk[i]).count()); // ones count bits
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);                                  // rotate  bits by 3
+        worker.chunk[i] ^= std::rotl(worker.chunk[i], 2);                                 // rotate  bits by 2
+        worker.chunk[i] = std::rotl(worker.chunk[i], 3);                                  // rotate  bits by 3
                                                                                             // INSERT_RANDOM_CODE_END
       }
       break;
@@ -10833,76 +10828,85 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
     //   std::cout << hexStr(&worker.step_3[worker.pos2], 1) << std::endl;
     // }
 
-    worker.A = (worker.step_3[worker.pos1] - worker.step_3[worker.pos2]);
-    worker.A = (256 + (worker.A % 256)) % 256;
+    __builtin_prefetch(worker.chunk,0,3);
+    // __builtin_prefetch(worker.chunk+64,0,3);
+    // __builtin_prefetch(worker.chunk+128,0,3);
+    __builtin_prefetch(worker.chunk+192,0,3);
 
-    if (debugOpOrder){printf("worker.A: %02X\n", worker.A);}
+    if (debugOpOrder) {
+      printf("tries: %03lu  chunk_after[  0->%03d]: ", worker.tries, worker.pos2);
+      for (int x = 0; x <= worker.pos2+16 && worker.pos2+16 < 256; x++) {
+        printf("%02x", worker.chunk[x]);
+      }
+      printf("\n");
+    }
+    if (worker.op == sus_op && debugOpOrder) printf(" CPU: A: c[%02d] %02x c[%02d] %02x\n", worker.pos1, worker.chunk[worker.pos1], worker.pos2, worker.chunk[worker.pos2]);
+    worker.A = (worker.chunk[worker.pos1] - worker.chunk[worker.pos2]);
+    worker.A = (256 + (worker.A % 256)) % 256;
 
     if (worker.A < 0x10)
     { // 6.25 % probability
-      if (debugOpOrder){printf("A\n");}
-      __builtin_prefetch(worker.step_3, 0, 0);
       worker.prev_lhash = worker.lhash + worker.prev_lhash;
-      worker.lhash = XXHash64::hash(worker.step_3, worker.pos2, 0);
-      // if (debugOpOrder) printf("A: new worker.lhash: %08jx\n", worker.lhash);
+      worker.lhash = XXHash64::hash(worker.chunk, worker.pos2, 0);
+
+      // uint64_t test = XXHash64::hash(worker.step_3, worker.pos2, 0);
+      if (worker.op == sus_op && debugOpOrder) printf(" CPU: A: new worker.lhash: %08jx\n", worker.lhash);
     }
 
     if (worker.A < 0x20)
     { // 12.5 % probability
-      if (debugOpOrder){printf("B\n");}
-      __builtin_prefetch(worker.step_3, 0, 0);
       worker.prev_lhash = worker.lhash + worker.prev_lhash;
-      worker.lhash = hash_64_fnv1a(worker.step_3, worker.pos2);
-      // if (debugOpOrder) printf("B: new worker.lhash: %08jx\n", worker.lhash);
+      worker.lhash = hash_64_fnv1a(worker.chunk, worker.pos2);
+
+      // uint64_t test = hash_64_fnv1a(worker.step_3, worker.pos2);
+      if (worker.op == sus_op && debugOpOrder) printf(" CPU: B: new worker.lhash: %08jx\n", worker.lhash);
     }
 
     if (worker.A < 0x30)
     { // 18.75 % probability
-      // std::copy(worker.step_3, worker.step_3 + worker.pos2, s3);
-        if (debugOpOrder){printf("C\n");}
-      __builtin_prefetch(worker.step_3, 0, 0);
       worker.prev_lhash = worker.lhash + worker.prev_lhash;
       HH_ALIGNAS(16)
       const highwayhash::HH_U64 key2[2] = {worker.tries, worker.prev_lhash};
-      worker.lhash = highwayhash::SipHash(key2, (char*)worker.step_3, worker.pos2); // more deviations
-      // if (debugOpOrder) printf("C: new worker.lhash: %08jx\n", worker.lhash);
+      worker.lhash = highwayhash::SipHash(key2, (char*)worker.chunk, worker.pos2); // more deviations
+
+      // uint64_t test = highwayhash::SipHash(key2, (char*)worker.step_3, worker.pos2); // more deviations
+      if (worker.op == sus_op && debugOpOrder) printf(" CPU: C: new worker.lhash: %08jx\n", worker.lhash);
     }
 
     if (worker.A <= 0x40)
     { // 25% probablility
-      // if (debugOpOrder) {
-      //   printf("D: RC4 key:\n");
+      // if (debugOpOrder && worker.op == sus_op) {
+      //   printf("SIMD: D: RC4 key:\n");
       //   for (int i = 0; i < 256; i++) {
       //     printf("%d, ", worker.key.data[i]);
       //   }
       // }
-        if (debugOpOrder){printf("D\n");}
-      __builtin_prefetch(&worker.key, 0, 0);
-      RC4(&worker.key, 256, worker.step_3,  worker.step_3);
+      RC4(&worker.key, 256, worker.chunk, worker.chunk);
     }
 
-    worker.step_3[255] = worker.step_3[255] ^ worker.step_3[worker.pos1] ^ worker.step_3[worker.pos2];
+    worker.chunk[255] = worker.chunk[255] ^ worker.chunk[worker.pos1] ^ worker.chunk[worker.pos2];
 
-    prefetch(worker.step_3, 256, 1);
-    memcpy(&worker.sData[(worker.tries - 1) * 256], worker.step_3, 256);
+    // if (debugOpOrder && worker.op == sus_op) {
+    //   printf("SIMD op %d result:\n", worker.op);
+    //   for (int i = 0; i < 256; i++) {
+    //       printf("%02X ", worker.chunk[i]);
+    //   } 
+    //   printf("\n");
+    // }
 
+    // memcpy(&worker.sData[(worker.tries - 1) * 256], worker.step_3, 256);
     
-    if (debugOpOrder && worker.op == sus_op) {
-      printf("op %d result:\n", worker.op);
-      for (int i = 0; i < 256; i++) {
-          printf("%02X ", worker.step_3[i]);
-      } 
-      printf("\n");
-    }
     // std::copy(worker.step_3, worker.step_3 + 256, &worker.sData[(worker.tries - 1) * 256]);
 
     // memcpy(&worker->data.data()[(worker.tries - 1) * 256], worker.step_3, 256);
 
     // std::cout << hexStr(worker.step_3, 256) << std::endl;
 
-    if (worker.tries > 260 + 16 || (worker.step_3[255] >= 0xf0 && worker.tries > 260))
+    if (worker.tries > 260 + 16 || (worker.sData[(worker.tries-1)*256+255] >= 0xf0 && worker.tries > 260))
     {
       break;
     }
+    if (debugOpOrder) printf("\n\n");
   }
+  worker.data_len = static_cast<uint32_t>((worker.tries - 4) * 256 + (((static_cast<uint64_t>(worker.chunk[253]) << 8) | static_cast<uint64_t>(worker.chunk[254])) & 0x3ff));
 }

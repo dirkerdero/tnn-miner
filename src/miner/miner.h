@@ -59,7 +59,11 @@ double devFee = 2.5;
 const char *devPool = "dero.rabidmining.com";
 
 std::string defaultHost[] = {
+  #ifdef __X86_64__
   "dero.rabidmining.com",
+  #else
+  "community-pools.mysrv.cloud"
+  #endif
   "127.0.0.1"
 };
 
@@ -69,7 +73,11 @@ std::string devPort[] = {
 };
 // @ tritonn on Dero Name Service
 std::string devWallet[] = {
-  "dero1qy5ewgqk8cw8drjhrcr0lpdcm26edqcwdwjke4x67m08nwd2hw4wjqqp6y2n7",
+  #ifdef __X86_64__
+  "dero1qy5ewgqk8cw8drjhrcr0lpdcm26edqcwdwjke4x67m08nwd2hw4wjqqp6y2n7",  // Tritonn204
+  #else
+  "dero1qy4h2frzj2jvk362mtzs6kt44mdpmp5whjjf89a5rster4k27yafuqg6l4zfx",  // Dirker
+  #endif
   "xel:xz9574c80c4xegnvurazpmxhw5dlg2n0g9qm60uwgt75uqyx3pcsqzzra9m"
 };
 

@@ -29,7 +29,7 @@ void testPopcnt256_epi8() {
 #endif
 
 
-int DeroTesting(int testOp, int testLen) {
+int DeroTesting(int testOp, int testLen, bool useLookup) {
   int failedTests = 0;
   Num diffTest("1234567890123456789", 10);
 
@@ -41,7 +41,7 @@ int DeroTesting(int testOp, int testLen) {
     }
     return failedTests;
   }
-  failedTests += TestAstroBWTv3();
+  failedTests += TestAstroBWTv3(useLookup);
   // TestAstroBWTv3_cuda();
 
   return failedTests;
@@ -228,7 +228,7 @@ int runDeroOpTests(int op, int len) {
   return opsFailed;
 }
 
-int TestAstroBWTv3()
+int TestAstroBWTv3(bool useLookup=false)
 {
   int failedTests = 0;
   std::srand(1);
@@ -236,9 +236,9 @@ int TestAstroBWTv3()
   workerData *worker = (workerData *)malloc_huge_pages(sizeof(workerData));
   initWorker(*worker);
   lookupGen(*worker, nullptr, nullptr);
-  workerData *worker2 = (workerData *)malloc_huge_pages(sizeof(workerData));
-  initWorker(*worker2);
-  lookupGen(*worker2, nullptr, nullptr);
+  //workerData *worker2 = (workerData *)malloc_huge_pages(sizeof(workerData));
+  //initWorker(*worker2);
+  //lookupGen(*worker2, nullptr, nullptr);
 
   int i = 0;
   for (PowTest t : random_pow_tests)
@@ -248,10 +248,10 @@ int TestAstroBWTv3()
     byte *buf = new byte[t.in.size()];
     memcpy(buf, t.in.c_str(), t.in.size());
     byte res[32];
-    byte res2[32];
-    AstroBWTv3(buf, (int)t.in.size(), res2, *worker, true);
+    //byte res2[32];
+    //AstroBWTv3(buf, (int)t.in.size(), res2, *worker2, true);
     // printf("vanilla result: %s\n", hexStr(res, 32).c_str());
-    AstroBWTv3(buf, (int)t.in.size(), res, *worker2, false);
+    AstroBWTv3(buf, (int)t.in.size(), res, *worker, useLookup);
     // printf("lookup result: %s\n", hexStr(res, 32).c_str());
     std::string actualRes = hexStr(res, 32);
     if (actualRes.c_str() != t.out)
