@@ -1278,27 +1278,47 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       }
       break;
     case 37:
-#pragma GCC unroll 32
-      for (int i = worker.pos1; i < worker.pos2; i++)
       {
-        // INSERT_RANDOM_CODE_START
-        worker.chunk[i] = (worker.chunk[i] << (worker.chunk[i] % 8)) | (worker.chunk[i] >> (8 - (worker.chunk[i] % 8))); // rotate  bits by random
-        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3);    // shift right
-        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3);    // shift right
-        worker.chunk[i] *= worker.chunk[i];                             // *
-                                                                          // INSERT_RANDOM_CODE_END
+        worker.opt[worker.op] = true;
+        uint8x16_t p2vec = vdupq_n_u8(worker.chunk[worker.pos2]);
+        for (int i = worker.pos1; i < worker.pos2; i+=16)
+        {
+          uint8x16_t data = vld1q_u8(&worker.chunk[i]);
+
+          //worker.chunk[i] = (worker.chunk[i] << (worker.chunk[i] % 8)) | (worker.chunk[i] >> (8 - (worker.chunk[i] % 8)));
+          data = rotate_by_self(data);
+          //worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3);
+          data = shift_right_by_int_with_and(data, 3);
+          //worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3);
+          data = shift_right_by_int_with_and(data, 3);
+          //worker.chunk[i] *= worker.chunk[i];        
+          data = mul_with_self(data);
+
+          vst1q_u8(&worker.chunk[i], data);
+        }
+        memcpy(&worker.chunk[worker.pos2], worker.fixme, 16);
       }
       break;
     case 38:
-#pragma GCC unroll 32
-      for (int i = worker.pos1; i < worker.pos2; i++)
       {
-        // INSERT_RANDOM_CODE_START
-        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3);    // shift right
-        worker.chunk[i] = (worker.chunk[i] << 3) | (worker.chunk[i] >> (8 - 3));                // rotate  bits by 3
-        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
-        worker.chunk[i] = (worker.chunk[i] << (worker.chunk[i] % 8)) | (worker.chunk[i] >> (8 - (worker.chunk[i] % 8))); // rotate  bits by random
-                                                                          // INSERT_RANDOM_CODE_END
+        worker.opt[worker.op] = true;
+        uint8x16_t p2vec = vdupq_n_u8(worker.chunk[worker.pos2]);
+        for (int i = worker.pos1; i < worker.pos2; i+=16)
+        {
+          uint8x16_t data = vld1q_u8(&worker.chunk[i]);
+
+          //worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3);
+          data = shift_right_by_int_with_and(data, 3);
+          //worker.chunk[i] = (worker.chunk[i] << 3) | (worker.chunk[i] >> (8 - 3));
+          data = rotate_bits(data, 3);
+          //worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];
+          data = xor_with_bittable(data);
+          //worker.chunk[i] = (worker.chunk[i] << (worker.chunk[i] % 8)) | (worker.chunk[i] >> (8 - (worker.chunk[i] % 8)));
+          data = rotate_by_self(data);
+
+          vst1q_u8(&worker.chunk[i], data);
+        }
+        memcpy(&worker.chunk[worker.pos2], worker.fixme, 16);
       }
       break;
     case 39:
@@ -1314,27 +1334,47 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       }
       break;
     case 40:
-#pragma GCC unroll 32
-      for (int i = worker.pos1; i < worker.pos2; i++)
       {
-        // INSERT_RANDOM_CODE_START
-        worker.chunk[i] = (worker.chunk[i] << (worker.chunk[i] % 8)) | (worker.chunk[i] >> (8 - (worker.chunk[i] % 8))); // rotate  bits by random
-        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
-        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
-        worker.chunk[i] ^= worker.chunk[worker.pos2];                   // XOR
-                                                                          // INSERT_RANDOM_CODE_END
+        worker.opt[worker.op] = true;
+        uint8x16_t p2vec = vdupq_n_u8(worker.chunk[worker.pos2]);
+        for (int i = worker.pos1; i < worker.pos2; i+=16)
+        {
+          uint8x16_t data = vld1q_u8(&worker.chunk[i]);
+
+          //worker.chunk[i] = (worker.chunk[i] << (worker.chunk[i] % 8)) | (worker.chunk[i] >> (8 - (worker.chunk[i] % 8)));
+          data = rotate_by_self(data);
+          //worker.chunk[i] ^= worker.chunk[worker.pos2];
+          data = xor_vectors(data, p2vec);
+          //worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];
+          data = xor_with_bittable(data);
+          //worker.chunk[i] ^= worker.chunk[worker.pos2];
+          data = xor_vectors(data, p2vec);
+
+          vst1q_u8(&worker.chunk[i], data);
+        }
+        memcpy(&worker.chunk[worker.pos2], worker.fixme, 16);
       }
       break;
     case 41:
-#pragma GCC unroll 32
-      for (int i = worker.pos1; i < worker.pos2; i++)
       {
-        // INSERT_RANDOM_CODE_START
-        worker.chunk[i] = (worker.chunk[i] << 5) | (worker.chunk[i] >> (8 - 5));  // rotate  bits by 5
-        worker.chunk[i] -= (worker.chunk[i] ^ 97);        // XOR and -
-        worker.chunk[i] = (worker.chunk[i] << 3) | (worker.chunk[i] >> (8 - 3));  // rotate  bits by 3
-        worker.chunk[i] ^= (worker.chunk[i] << 4) | (worker.chunk[i] >> (8 - 4)); // rotate  bits by 4
-                                                            // INSERT_RANDOM_CODE_END
+        worker.opt[worker.op] = true;
+        uint8x16_t p2vec = vdupq_n_u8(worker.chunk[worker.pos2]);
+        for (int i = worker.pos1; i < worker.pos2; i+=16)
+        {
+          uint8x16_t data = vld1q_u8(&worker.chunk[i]);
+
+          //worker.chunk[i] = (worker.chunk[i] << 5) | (worker.chunk[i] >> (8 - 5));
+          data = rotate_bits(data, 5);
+          //worker.chunk[i] -= (worker.chunk[i] ^ 97);
+          data = subtract_xored(data, 97);
+          //worker.chunk[i] = (worker.chunk[i] << 3) | (worker.chunk[i] >> (8 - 3));
+          data = rotate_bits(data, 3);
+          //worker.chunk[i] ^= (worker.chunk[i] << 4) | (worker.chunk[i] >> (8 - 4));
+          data = rotate_and_xor(data, 4);
+
+          vst1q_u8(&worker.chunk[i], data);
+        }
+        memcpy(&worker.chunk[worker.pos2], worker.fixme, 16);
       }
       break;
     case 42:
@@ -1362,15 +1402,25 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       }
       break;
     case 44:
-#pragma GCC unroll 32
-      for (int i = worker.pos1; i < worker.pos2; i++)
       {
-        // INSERT_RANDOM_CODE_START
-        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
-        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];             // ones count bits
-        worker.chunk[i] = (worker.chunk[i] << 3) | (worker.chunk[i] >> (8 - 3));                // rotate  bits by 3
-        worker.chunk[i] = (worker.chunk[i] << (worker.chunk[i] % 8)) | (worker.chunk[i] >> (8 - (worker.chunk[i] % 8))); // rotate  bits by random
-                                                                          // INSERT_RANDOM_CODE_END
+        worker.opt[worker.op] = true;
+        uint8x16_t p2vec = vdupq_n_u8(worker.chunk[worker.pos2]);
+        for (int i = worker.pos1; i < worker.pos2; i+=16)
+        {
+          uint8x16_t data = vld1q_u8(&worker.chunk[i]);
+
+          //worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];
+          data = xor_with_bittable(data);
+          //worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];
+          data = xor_with_bittable(data);
+          //worker.chunk[i] = (worker.chunk[i] << 3) | (worker.chunk[i] >> (8 - 3));
+          data = rotate_bits(data, 3);
+          //worker.chunk[i] = (worker.chunk[i] << (worker.chunk[i] % 8)) | (worker.chunk[i] >> (8 - (worker.chunk[i] % 8))); 
+          data = rotate_by_self(data);
+
+          vst1q_u8(&worker.chunk[i], data);
+        }
+        memcpy(&worker.chunk[worker.pos2], worker.fixme, 16);
       }
       break;
     case 45:
@@ -1422,15 +1472,25 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       }
       break;
     case 49:
-#pragma GCC unroll 32
-      for (int i = worker.pos1; i < worker.pos2; i++)
       {
-        // INSERT_RANDOM_CODE_START
-        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
-        worker.chunk[i] += worker.chunk[i];                 // +
-        worker.chunk[i] = reverse_bits(worker.chunk[i]);        // reverse bits
-        worker.chunk[i] ^= (worker.chunk[i] << 4) | (worker.chunk[i] >> (8 - 4));   // rotate  bits by 4
-                                                              // INSERT_RANDOM_CODE_END
+        worker.opt[worker.op] = true;
+        uint8x16_t p2vec = vdupq_n_u8(worker.chunk[worker.pos2]);
+        for (int i = worker.pos1; i < worker.pos2; i+=16)
+        {
+          uint8x16_t data = vld1q_u8(&worker.chunk[i]);
+
+          //worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];
+          data = xor_with_bittable(data);
+          //worker.chunk[i] += worker.chunk[i];
+          data = add_with_self(data);
+          //worker.chunk[i] = reverse_bits(worker.chunk[i]);
+          data = reverse_bits(data);
+          //worker.chunk[i] ^= (worker.chunk[i] << 4) | (worker.chunk[i] >> (8 - 4));
+          data = rotate_and_xor(data, 4);
+
+          vst1q_u8(&worker.chunk[i], data);
+        }
+        memcpy(&worker.chunk[worker.pos2], worker.fixme, 16);
       }
       break;
     case 50:
@@ -1446,15 +1506,25 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       }
       break;
     case 51:
-#pragma GCC unroll 32
-      for (int i = worker.pos1; i < worker.pos2; i++)
       {
-        // INSERT_RANDOM_CODE_START
-        worker.chunk[i] ^= worker.chunk[worker.pos2];     // XOR
-        worker.chunk[i] ^= (worker.chunk[i] << 4) | (worker.chunk[i] >> (8 - 4)); // rotate  bits by 4
-        worker.chunk[i] ^= (worker.chunk[i] << 4) | (worker.chunk[i] >> (8 - 4)); // rotate  bits by 4
-        worker.chunk[i] = (worker.chunk[i] << 5) | (worker.chunk[i] >> (8 - 5));  // rotate  bits by 5
-                                                            // INSERT_RANDOM_CODE_END
+        worker.opt[worker.op] = true;
+        uint8x16_t p2vec = vdupq_n_u8(worker.chunk[worker.pos2]);
+        for (int i = worker.pos1; i < worker.pos2; i+=16)
+        {
+          uint8x16_t data = vld1q_u8(&worker.chunk[i]);
+
+          //worker.chunk[i] ^= worker.chunk[worker.pos2];
+          data = xor_vectors(data, p2vec);
+          //worker.chunk[i] ^= (worker.chunk[i] << 4) | (worker.chunk[i] >> (8 - 4));
+          data = rotate_and_xor(data, 4);
+          //worker.chunk[i] ^= (worker.chunk[i] << 4) | (worker.chunk[i] >> (8 - 4));
+          data = rotate_and_xor(data, 4);
+          //worker.chunk[i] = (worker.chunk[i] << 5) | (worker.chunk[i] >> (8 - 5));
+          data = rotate_bits(data, 5);
+
+          vst1q_u8(&worker.chunk[i], data);
+        }
+        memcpy(&worker.chunk[worker.pos2], worker.fixme, 16);
       }
       break;
     case 52:
@@ -1470,15 +1540,25 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       }
       break;
     case 53:
-#pragma GCC unroll 32
-      for (int i = worker.pos1; i < worker.pos2; i++)
       {
-        // INSERT_RANDOM_CODE_START
-        worker.chunk[i] += worker.chunk[i];                 // +
-        worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]]; // ones count bits
-        worker.chunk[i] ^= (worker.chunk[i] << 4) | (worker.chunk[i] >> (8 - 4));   // rotate  bits by 4
-        worker.chunk[i] ^= (worker.chunk[i] << 4) | (worker.chunk[i] >> (8 - 4));   // rotate  bits by 4
-                                                              // INSERT_RANDOM_CODE_END
+        worker.opt[worker.op] = true;
+        uint8x16_t p2vec = vdupq_n_u8(worker.chunk[worker.pos2]);
+        for (int i = worker.pos1; i < worker.pos2; i+=16)
+        {
+          uint8x16_t data = vld1q_u8(&worker.chunk[i]);
+
+          //worker.chunk[i] += worker.chunk[i];
+          data = add_with_self(data);
+          //worker.chunk[i] ^= (byte)bitTable[worker.chunk[i]];
+          data = xor_with_bittable(data);
+          //worker.chunk[i] ^= (worker.chunk[i] << 4) | (worker.chunk[i] >> (8 - 4));
+          data = rotate_and_xor(data, 4);
+          //worker.chunk[i] ^= (worker.chunk[i] << 4) | (worker.chunk[i] >> (8 - 4));
+          data = rotate_and_xor(data, 4);
+
+          vst1q_u8(&worker.chunk[i], data);
+        }
+        memcpy(&worker.chunk[worker.pos2], worker.fixme, 16);
       }
       break;
     case 54:
@@ -1771,15 +1851,25 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       }
       break;
     case 76:
-#pragma GCC unroll 32
-      for (int i = worker.pos1; i < worker.pos2; i++)
       {
-        // INSERT_RANDOM_CODE_START
-        worker.chunk[i] = (worker.chunk[i] << (worker.chunk[i] % 8)) | (worker.chunk[i] >> (8 - (worker.chunk[i] % 8))); // rotate  bits by random
-        worker.chunk[i] ^= (worker.chunk[i] << 2) | (worker.chunk[i] >> (8 - 2));               // rotate  bits by 2
-        worker.chunk[i] = (worker.chunk[i] << 5) | (worker.chunk[i] >> (8 - 5));                // rotate  bits by 5
-        worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3);    // shift right
-                                                                          // INSERT_RANDOM_CODE_END
+        worker.opt[worker.op] = true;
+        uint8x16_t p2vec = vdupq_n_u8(worker.chunk[worker.pos2]);
+        for (int i = worker.pos1; i < worker.pos2; i+=16)
+        {
+          uint8x16_t data = vld1q_u8(&worker.chunk[i]);
+
+          //worker.chunk[i] = (worker.chunk[i] << (worker.chunk[i] % 8)) | (worker.chunk[i] >> (8 - (worker.chunk[i] % 8)));
+          data = rotate_by_self(data);
+          //worker.chunk[i] ^= (worker.chunk[i] << 2) | (worker.chunk[i] >> (8 - 2));
+          data = rotate_and_xor(data, 2);
+          //worker.chunk[i] = (worker.chunk[i] << 5) | (worker.chunk[i] >> (8 - 5));
+          data = rotate_bits(data, 5);
+          //worker.chunk[i] = worker.chunk[i] >> (worker.chunk[i] & 3);
+          data = shift_right_by_int_with_and(data, 3);
+
+          vst1q_u8(&worker.chunk[i], data);
+        }
+        memcpy(&worker.chunk[worker.pos2], worker.fixme, 16);
       }
       break;
     case 77:
@@ -1795,15 +1885,25 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       }
       break;
     case 78:
-#pragma GCC unroll 32
-      for (int i = worker.pos1; i < worker.pos2; i++)
       {
-        // INSERT_RANDOM_CODE_START
-        worker.chunk[i] = (worker.chunk[i] << (worker.chunk[i] % 8)) | (worker.chunk[i] >> (8 - (worker.chunk[i] % 8))); // rotate  bits by random
-        worker.chunk[i] = reverse_bits(worker.chunk[i]);                    // reverse bits
-        worker.chunk[i] *= worker.chunk[i];                             // *
-        worker.chunk[i] -= (worker.chunk[i] ^ 97);                      // XOR and -
-                                                                          // INSERT_RANDOM_CODE_END
+        worker.opt[worker.op] = true;
+        uint8x16_t p2vec = vdupq_n_u8(worker.chunk[worker.pos2]);
+        for (int i = worker.pos1; i < worker.pos2; i+=16)
+        {
+          uint8x16_t data = vld1q_u8(&worker.chunk[i]);
+
+          //worker.chunk[i] = (worker.chunk[i] << (worker.chunk[i] % 8)) | (worker.chunk[i] >> (8 - (worker.chunk[i] % 8)));
+          data = rotate_by_self(data);
+          //worker.chunk[i] = reverse_bits(worker.chunk[i]);
+          data = reverse_bits(data);
+          //worker.chunk[i] *= worker.chunk[i];
+          data = mul_with_self(data);
+          //worker.chunk[i] -= (worker.chunk[i] ^ 97);
+          data = subtract_xored(data, 97);
+
+          vst1q_u8(&worker.chunk[i], data);
+        }
+        memcpy(&worker.chunk[worker.pos2], worker.fixme, 16);
       }
       break;
     case 79:
@@ -1894,15 +1994,25 @@ void branchComputeCPU_aarch64(workerData &worker, bool isTest)
       }
       break;
     case 86:
-#pragma GCC unroll 32
-      for (int i = worker.pos1; i < worker.pos2; i++)
       {
-        // INSERT_RANDOM_CODE_START
-        worker.chunk[i] ^= (worker.chunk[i] << 4) | (worker.chunk[i] >> (8 - 4));               // rotate  bits by 4
-        worker.chunk[i] = (worker.chunk[i] << (worker.chunk[i] % 8)) | (worker.chunk[i] >> (8 - (worker.chunk[i] % 8))); // rotate  bits by random
-        worker.chunk[i] ^= (worker.chunk[i] << 4) | (worker.chunk[i] >> (8 - 4));               // rotate  bits by 4
-        worker.chunk[i] = ~worker.chunk[i];                             // binary NOT operator
-                                                                          // INSERT_RANDOM_CODE_END
+        worker.opt[worker.op] = true;
+        uint8x16_t p2vec = vdupq_n_u8(worker.chunk[worker.pos2]);
+        for (int i = worker.pos1; i < worker.pos2; i+=16)
+        {
+          uint8x16_t data = vld1q_u8(&worker.chunk[i]);
+
+          //worker.chunk[i] ^= (worker.chunk[i] << 4) | (worker.chunk[i] >> (8 - 4));
+          data = rotate_and_xor(data, 4);
+          //worker.chunk[i] = (worker.chunk[i] << (worker.chunk[i] % 8)) | (worker.chunk[i] >> (8 - (worker.chunk[i] % 8)));
+          data = rotate_by_self(data);
+          //worker.chunk[i] ^= (worker.chunk[i] << 4) | (worker.chunk[i] >> (8 - 4));
+          data = rotate_and_xor(data, 4);
+          //worker.chunk[i] = ~worker.chunk[i];
+          data = binary_not(data);
+
+          vst1q_u8(&worker.chunk[i], data);
+        }
+        memcpy(&worker.chunk[worker.pos2], worker.fixme, 16);
       }
       break;
     case 87:
