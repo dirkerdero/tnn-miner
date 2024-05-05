@@ -3483,7 +3483,7 @@ void optest(int op, workerData &worker, byte testData[32], OpTestResult &testRes
   testRes.duration_ns = time;
   memcpy(testRes.result, worker.step_3, 256);
   if (print) {
-    printf("SC result     : ");
+    printf("SC result     : %03d -> %03d", worker.pos1, worker.pos2);
     for (int i = worker.pos1; i < worker.pos1 + 32; i++) {
       printf("%02x ", worker.step_3[i]);
     }
@@ -3605,7 +3605,7 @@ void optest_aarch64(int op, workerData &worker, byte testData[32], OpTestResult 
   memcpy(testRes.result, worker.chunk, 256);
   //memcpy(testRes.result, worker.salsaInput, 256);
   if (print){
-    printf("AA64 result   : ");
+    printf("AA64 result   : %03d -> %03d", worker.pos1, worker.pos2);
     for (int i = worker.pos1; i < worker.pos1 + 32; i++) {
       printf("%02x ", worker.chunk[i]);
     }

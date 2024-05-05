@@ -341,6 +341,10 @@ inline __m256i _mm256_reverse_epi8(__m256i input) {
 class workerData
 {
 public:
+  // For aarch64
+  byte fixme[256];
+  byte opt[256];
+
   byte step_3[256];
   int freq[256];
 
