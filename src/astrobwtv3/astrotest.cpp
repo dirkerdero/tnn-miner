@@ -109,7 +109,11 @@ int runDeroVerificationTests(bool useLookup, int dataLen=15) {
 
     auto percent_speedup = double(double(control_dur-test_dur)/double(test_dur))*100;
     bool valid = 0 == memcmp(controlResult->result, testResult->result, dataLen);
-    printf("  Op: %3d - %6ld ns / %6ld ns = %6.2f %% - %s\n", op, controlResult->duration_ns.count(), testResult->duration_ns.count(), percent_speedup, valid ? "true" : "false");
+    char isOpt = ' ';
+    if(testWorker->opt[op]) {
+      isOpt = '*';
+    }
+    printf("%cOp: %3d - %6ld ns / %6ld ns = %6.2f %% - %s\n", isOpt, op, controlResult->duration_ns.count(), testResult->duration_ns.count(), percent_speedup, valid ? "true" : "false");
     if(!valid) {
       numOpsFailed++;
       printf("Vanilla: ");
